@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Run parallel Claude Code and Codex agents in tmux, each on its own account</title>
+  <meta name="description" content="Let one Claude Code or Codex session split a job across tmux windows, with each worker on a different account or an API model such as DeepSeek. No GUI needed, so it works over SSH too. Install the tmux-fleet plugin and ask.">
+  <link rel="canonical" href="https://larcane97.github.io/clausona/guides/parallel-agents-in-tmux/">
+  <link rel="alternate" hreflang="en" href="https://larcane97.github.io/clausona/guides/parallel-agents-in-tmux/">
+  <link rel="alternate" hreflang="ko" href="https://larcane97.github.io/clausona/ko/parallel-agents-in-tmux/">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="clausona">
+  <meta property="og:title" content="Run parallel Claude Code and Codex agents in tmux, each on its own account">
+  <meta property="og:description" content="Let one Claude Code or Codex session split a job across tmux windows, with each worker on a different account or an API model such as DeepSeek. No GUI needed, so it works over SSH too. Install the tmux-fleet plugin and ask.">
+  <meta property="og:url" content="https://larcane97.github.io/clausona/guides/parallel-agents-in-tmux/">
+  <meta property="og:image" content="https://larcane97.github.io/clausona/assets/social-preview.png">
+  <meta property="article:published_time" content="2026-10-16">
+  <meta property="article:modified_time" content="2026-10-16">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Recursive:wght,CASL,MONO@300..900,0..1,0..1&display=swap">
+  <link rel="stylesheet" href="../../style.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": "Run parallel Claude Code and Codex agents in tmux, each on its own account",
+    "description": "Let one Claude Code or Codex session split a job across tmux windows, with each worker on a different account or an API model such as DeepSeek. No GUI needed, so it works over SSH too. Install the tmux-fleet plugin and ask.",
+    "datePublished": "2026-10-16",
+    "dateModified": "2026-10-16",
+    "inLanguage": "en",
+    "image": "https://larcane97.github.io/clausona/assets/social-preview.png",
+    "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
+    "mainEntityOfPage": "https://larcane97.github.io/clausona/guides/parallel-agents-in-tmux/",
+    "about": [
+      { "@type": "SoftwareApplication", "name": "tmux", "url": "https://github.com/tmux/tmux" },
+      { "@type": "SoftwareApplication", "name": "Claude Code" },
+      { "@type": "SoftwareApplication", "name": "Codex CLI" },
+      { "@type": "SoftwareApplication", "name": "clausona", "url": "https://github.com/larcane97/clausona" }
+    ]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      { "@type": "ListItem", "position": 1, "name": "clausona", "item": "https://larcane97.github.io/clausona/" },
+      { "@type": "ListItem", "position": 2, "name": "Parallel agents in tmux", "item": "https://larcane97.github.io/clausona/guides/parallel-agents-in-tmux/" }
+    ]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "Does the main session have to run inside tmux?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. The plugin finds your tmux session through $TMUX, so start Claude Code or Codex in a tmux pane and ask from there. It needs tmux 3.2 or newer."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does it work over SSH?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. It needs no GUI, only tmux on the machine where the agents run. SSH in, start Claude Code or Codex in a tmux pane there, and the workers open as windows in that same session."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does it work on Windows?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Inside WSL, yes. tmux doesn't run natively on Windows. If you want to stay outside WSL, herdr and Orca both run on Windows, and herdr-fleet and orca-fleet work the same way there."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Do I need herdr or Superset for this?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. tmux and clausona are all it needs, next to Claude Code or Codex. If you already use herdr, Orca or Superset, each has its own fleet plugin with the same rules."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "What happens when a worker hits its usage limit?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "The main session opens a new pane in that worker's window, on another profile your rules allow, and hands the task over there. Then it closes the pane that stopped."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Can removing a worker lose work?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Only uncommitted changes could, and the plugin removes worktrees with git worktree remove without --force, which refuses a worktree that has them. It also checks that the branch is pushed first. If either check fails, the worker stays."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Will the brief files end up in my commits?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. Briefs, follow-ups, the hook settings and the event log all start with .fleet-, and that pattern goes into the repo's .git/info/exclude. Your .gitignore stays as it is."
+        }
+      }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="wordmark" href="../../">clausona</a>
+      <nav class="site-nav" aria-label="Site">
+        <a href="../multiple-claude-code-accounts/">Claude Code</a>
+        <a href="../multiple-codex-cli-accounts/">Codex</a>
+        <a href="../parallel-claude-code-agents/">Agent fleets</a>
+        <a href="../claude-code-skills-mcp-hooks/">Extensions</a>
+        <a href="../../ko/parallel-agents-in-tmux/" hreflang="ko" lang="ko">한국어</a>
+        <a href="https://github.com/larcane97/clausona">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <article class="article">
+      <nav class="crumbs" aria-label="Breadcrumb"><a href="../../">clausona</a> / <a href="../parallel-claude-code-agents/">Agent fleets</a></nav>
+      <h1>Run parallel Claude Code and Codex agents in tmux, each on its own account</h1>
+      <p class="lead">A lot of people already keep their agents in tmux, one window each. With clausona, every one of those windows can run on a different account, or on a model like DeepSeek.</p>
+      <p class="updated">Updated <time datetime="2026-10-16">October 16, 2026</time></p>
+
+      <div class="answer">
+        <p>Install the <code>tmux-fleet</code> plugin. It brings <code>fleet-core</code>, the rules all the fleet plugins share, with it:</p>
+<pre data-copy><code>claude plugin marketplace add larcane97/clausona
+claude plugin install tmux-fleet@clausona</code></pre>
+        <p>Then start Claude Code in a tmux pane and ask something like "Split these across my accounts in tmux: add a <code>--json</code> flag to <code>notes list</code>, and write tests for <code>src/parse.ts</code>."</p>
+        <p>It plans the work and opens a tmux window per task, on the account each one should use. It checks what comes back before it cleans up.</p>
+      </div>
+
+      <h2 id="see">What you see in tmux</h2>
+      <p>Each worker gets its own git worktree and its own window in your current tmux session. The window is named after the task and the clausona profile, like <code>tests · ds-flash</code>, so the status bar tells you which account is doing what.</p>
+      <p>Press your prefix key and a window's number to jump to that worker. You can read along or type into it. If one heads the wrong way, you stop that one and leave the rest alone.</p>
+      <p>What tmux can't tell you on its own is whether an agent is still working. So the workers report it themselves.</p>
+      <p>A Claude Code worker starts with hooks that only it uses. They live in <code>.fleet-claude.json</code> in its worktree and reach it through <code>--settings</code>, so your shared settings.json stays as it is.</p>
+      <p>A Codex worker is told to ring the terminal bell when it waits for approval or finishes a turn. A tmux hook on its window writes that down, and the status bar puts a <code>!</code> on the window.</p>
+      <p>Both end up as events in <code>.fleet-events.jsonl</code> in the worktree. The main session waits on them through a small Node script that ships with the plugin.</p>
+
+      <h2 id="run">How a run goes</h2>
+      <p>The main session reads your profiles with <code>clausona list</code> and picks one per task. If neither your request nor <code>fleet.json</code> names the accounts, it shows you the plan and waits for your OK.</p>
+      <p>Then, for each task, it adds a git worktree at <code>~/.clausona/worktrees/&lt;repo&gt;/&lt;task&gt;</code> on a branch called <code>fleet/&lt;task&gt;</code>. It opens a window for it in the same tmux session and types <code>clausona run</code> for the chosen profile into that window's shell.</p>
+      <p>The brief goes into a <code>.fleet-*.md</code> file in the worktree, and the worker gets one line telling it to read that file. Every <code>.fleet-*</code> file is listed in the repo's <code>.git/info/exclude</code>, so none of them lands in a commit.</p>
+      <p>Signals can get lost. If a worker that's busy prints nothing for three minutes and no event comes in, the wait wakes up anyway. One missed signal doesn't leave the run hanging.</p>
+      <p>When a worker says it's done, the main session checks for itself. It looks at the commits, the diff and a clean, pushed branch.</p>
+      <p>Then it removes the worktree with <code>git worktree remove</code>, after you approve (the default) or right away if <code>retire</code> is <code>auto</code>. It never adds <code>--force</code>, so git refuses a worktree with changes, and the worker is kept. Once the worktree is gone, the window closes. The branch stays.</p>
+      <p>The first time a profile meets your repo, Claude Code or Codex asks whether to trust the folder. The main session reads the worker's screen and answers with keys, for the repo you asked it to work on and for nothing else.</p>
+      <p>And if a worker stops at a usage limit, the main session opens a new pane in that worker's window on another profile, hands the task over, and closes the old pane.</p>
+
+      <h2 id="codex">Codex as the main session</h2>
+      <p>Codex can coordinate too. Install the plugins in Codex. There are no plugin dependencies there, so add <code>fleet-core</code> yourself:</p>
+<pre data-copy><code>codex plugin marketplace add larcane97/clausona
+codex plugin add fleet-core@clausona
+codex plugin add tmux-fleet@clausona</code></pre>
+      <p>A Codex main session waits for workers a few minutes at a time, since Codex has no background tasks that would wake it.</p>
+      <p>A Codex fleet uses Codex accounts by default, and a Claude Code fleet uses Claude Code accounts. The other tool's profiles only join when you name them or list them in <code>workers</code>.</p>
+      <p>Codex workers start with <code>--disable hooks</code>, so they don't stop at Codex's "Hooks need review" screen. Whether to trust hooks stays your decision.</p>
+      <p>In Codex's default sandbox, a Codex worker can't write to <code>.git</code> or reach the network. So it asks before it commits and again before it pushes, and you approve those in its window. If you'd rather it did that on its own, add <code>"codexSandbox": "danger-full-access"</code> to <code>permissions</code> in the settings file below. That turns Codex's sandbox off for workers.</p>
+      <p>One more Codex setting matters here. If your Codex config has <code>inherit = "core"</code> under <code>[shell_environment_policy]</code>, Codex hides <code>TMUX</code> from the commands it runs, and the main session can't find your tmux session. Start it with <code>-c shell_environment_policy.inherit=all</code> instead.</p>
+      <p>If your tmux has <code>bell-action none</code>, the bell from a Codex worker never reaches the hook. The main session then notices that worker only through the three-minute quiet check.</p>
+
+      <h2 id="settings">Settings</h2>
+      <p>The fleet plugins share one file, <code>~/.clausona/fleet.json</code>. It can list the profiles that may be workers, your routing rules in plain words, a usage limit, and whether finished workers are removed automatically. The <a href="../parallel-claude-code-agents/#routing">agent fleets guide</a> explains each key.</p>
+      <p>You can also just say it, for example "never use claude:personal for workers", and the main session updates the file.</p>
+
+      <h2 id="questions">Questions</h2>
+      <h3>Does the main session have to run inside tmux?</h3>
+      <p>Yes. The plugin finds your tmux session through <code>$TMUX</code>, so start Claude Code or Codex in a tmux pane and ask from there. It needs tmux 3.2 or newer.</p>
+      <h3>Does it work over SSH?</h3>
+      <p>Yes. It needs no GUI, only tmux on the machine where the agents run. SSH in, start Claude Code or Codex in a tmux pane there, and the workers open as windows in that same session.</p>
+      <h3>Does it work on Windows?</h3>
+      <p>Inside WSL, yes. tmux doesn't run natively on Windows. If you want to stay outside WSL, herdr and Orca both run on Windows, and <code>herdr-fleet</code> and <code>orca-fleet</code> work the same way there.</p>
+      <h3>Do I need herdr or Superset for this?</h3>
+      <p>No. tmux and clausona are all it needs, next to Claude Code or Codex. If you already use herdr, Orca or Superset, each has its own fleet plugin with the same rules.</p>
+      <h3>What happens when a worker hits its usage limit?</h3>
+      <p>The main session opens a new pane in that worker's window, on another profile your rules allow, and hands the task over there. Then it closes the pane that stopped.</p>
+      <h3>Can removing a worker lose work?</h3>
+      <p>Only uncommitted changes could, and the plugin removes worktrees with <code>git worktree remove</code> without <code>--force</code>, which refuses a worktree that has them. It also checks that the branch is pushed first. If either check fails, the worker stays.</p>
+      <h3>Will the brief files end up in my commits?</h3>
+      <p>No. Briefs, follow-ups, the hook settings and the event log all start with <code>.fleet-</code>, and that pattern goes into the repo's <code>.git/info/exclude</code>. Your <code>.gitignore</code> stays as it is.</p>
+
+      <section class="cta" aria-labelledby="try">
+        <h2 id="try">Start with your accounts</h2>
+        <p>clausona and the plugins are free and open source. Set up <a href="../multiple-claude-code-accounts/">your accounts</a> first, then add the plugin.</p>
+        <p>The reference page is on <a href="https://github.com/larcane97/clausona/blob/main/docs/usecases/tmux-fleet.md">GitHub</a>, where a star helps other people find it.</p>
+      </section>
+    </article>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>clausona is open source under the MIT license, on <a href="https://github.com/larcane97/clausona">GitHub</a>, and listed in <a href="https://github.com/hesreallyhim/awesome-claude-code">Awesome Claude Code</a>.</p>
+      <p>clausona is an independent open-source project, not affiliated with Anthropic, OpenAI or the other projects named here.</p>
+    </div>
+  </footer>
+  <script src="../../copy.js"></script>
+</body>
+</html>

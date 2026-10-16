@@ -63,7 +63,7 @@ You don't sign in again, and you don't reinstall plugins.
 - **Routing** — `clausona run --route main` starts on whichever account still has room, going by the same plan-quota readings. With a directory rule or a default route, a plain `clausona run claude` (or `codex`) picks the account on its own ([docs](docs/routing.md))
 - **Extensions** — the skills, MCP servers and hooks Claude Code and Codex load in a project, for every account, on the dashboard's Extensions screen or from `clausona skills`, `clausona mcp` and `clausona hooks`. Turn one off or delete it, behind a backup, and `undo` puts it back ([docs](docs/extensions.md))
 - **Two accounts at once** — `clausona run claude:personal` starts one session under another profile without switching, so two terminals can run two accounts side by side
-- **Parallel agent fleets** — plugins from this repo let one Claude Code or Codex session run parallel agents in [Superset](docs/usecases/superset-fleet.md), [herdr](docs/usecases/herdr-fleet.md) or [Orca](docs/usecases/orca-fleet.md), each on its own account or API model, then check and clean up after them. Install only the one for the tool you use
+- **Parallel agent fleets** — plugins from this repo let one Claude Code or Codex session run parallel agents in [Superset](docs/usecases/superset-fleet.md), [herdr](docs/usecases/herdr-fleet.md), [Orca](docs/usecases/orca-fleet.md) or plain [tmux](docs/usecases/tmux-fleet.md), each on its own account or API model, then check and clean up after them. Install only the one for the tool you use
 - **API profiles** — a profile can point at an API endpoint instead of a subscription login: the Anthropic API, a gateway, or a model you serve yourself
 - **Pure CLI passthrough** — no wrapping, no proxying, no background process. `claude` and `codex` run directly and unmodified. Compatible with oh-my-claudecode, Cline, codex plugins, and any other tool in your stack.
 - **Lightweight** — a single shell hook and a few symlinks. No daemon, no server, and no startup overhead: `claude` and `codex` start from a small cached script, and clausona itself runs only when something changed — a profile switch, a plugin install — or for a profile it can't cache, such as an API profile ([details](docs/how-it-works.md#the-launch-cache)).
@@ -448,23 +448,24 @@ Yes. `csn use` sets the account new `claude` and `codex` launches start with, an
 `clausona run claude:personal` starts one session under another profile without changing that.
 So one terminal can run your work account while another runs `clausona run claude:personal`.
 
-### Can each Superset, herdr or Orca agent run on a different account?
+### Can each Superset, herdr, Orca or tmux agent run on a different account?
 
 Yes. Start each one with `clausona run <profile> -- <args>`: as a custom agent's command in
-Superset → Settings → Agents, or in any herdr pane or Orca terminal. To have one session split a
-job across several such agents, watch them and clean up after them, install the plugin for your
-tool:
+Superset → Settings → Agents, or in any herdr pane, Orca terminal or tmux window. To have one
+session split a job across several such agents, watch them and clean up after them, install the
+plugin for your tool:
 
 ```bash
 claude plugin marketplace add larcane97/clausona
-claude plugin install superset-fleet@clausona   # or herdr-fleet, orca-fleet
+claude plugin install superset-fleet@clausona   # or herdr-fleet, orca-fleet, tmux-fleet
 ```
 
 In Codex, add the shared rules too: `codex plugin marketplace add larcane97/clausona`, then
 `codex plugin add fleet-core@clausona` and the runner's plugin. See the
-[Superset](docs/usecases/superset-fleet.md), [herdr](docs/usecases/herdr-fleet.md) and
-[Orca](docs/usecases/orca-fleet.md) pages. If you installed `clausona@clausona` before, run
-`claude plugin install superset-fleet@clausona` once after updating it.
+[Superset](docs/usecases/superset-fleet.md), [herdr](docs/usecases/herdr-fleet.md),
+[Orca](docs/usecases/orca-fleet.md) and [tmux](docs/usecases/tmux-fleet.md) pages. If you
+installed `clausona@clausona` before, run `claude plugin install superset-fleet@clausona` once
+after updating it.
 
 ### How is this different from setting `CLAUDE_CONFIG_DIR` myself?
 

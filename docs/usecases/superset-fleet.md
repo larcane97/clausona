@@ -9,7 +9,8 @@ different account's limits, or on an API model. You watch every one of them in S
 step in whenever you like.
 
 The `superset-fleet` skill, shipped as a plugin from this repo, teaches the coordinating
-session how to do it. The same pattern runs in [herdr](herdr-fleet.md) and [Orca](orca-fleet.md).
+session how to do it. The same pattern runs in [herdr](herdr-fleet.md), [Orca](orca-fleet.md)
+and [tmux](tmux-fleet.md).
 
 ## Why not subagents?
 

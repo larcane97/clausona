@@ -9,7 +9,7 @@ each on a different account or an API model, and you can switch to any worker's 
 into it.
 
 The `herdr-fleet` plugin from this repo teaches the coordinating session how to do it. The same
-pattern runs in [Superset](superset-fleet.md) and [Orca](orca-fleet.md).
+pattern runs in [Superset](superset-fleet.md), [Orca](orca-fleet.md) and [tmux](tmux-fleet.md).
 
 ## Why not subagents?
 
