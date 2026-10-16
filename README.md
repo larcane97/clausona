@@ -96,10 +96,13 @@ irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 |
 
 **Updating.** When a newer release is out, the dashboard (`csn`) says so in its header and lists
 **Update** above Profiles; choose it and answer `Y`, and csn restarts on the new version. From a
-script or another shell, `clausona update` does the same (`--yes` skips the question). Either way
-the download is checked against the release's published SHA-256 before the installed copy is
-replaced. Only a copy the installer put in place updates itself; any other is pointed at the
-installer.
+script or another shell, `clausona update` does the same (`--yes` skips the question). Other
+commands you run in a terminal, such as `clausona list`, ask after their output:
+`Update now? (Y/n)`. Answer `n` and they leave it for a week. They learn about a release from a
+check that runs in the background at most once a day, so no command waits for GitHub. However
+you update, the download is checked against the release's published SHA-256 before the installed
+copy is replaced. Only a copy the installer put in place updates itself; any other is pointed at
+the installer.
 
 **After upgrading, open a new shell** — or re-run the hook in each shell that is already open:
 `eval "$(clausona shell-init)"` on zsh/bash, `Invoke-Expression (& clausona shell-init | Out-String)`

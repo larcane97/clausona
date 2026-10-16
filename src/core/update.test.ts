@@ -15,17 +15,24 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
+import type { NoticesDeps } from "./notices.js";
 import {
+  cachedUpdateTag,
   checkLatestTag,
   compareVersions,
+  createUpdater,
   type FetchLike,
   findUpdate,
   installTarget,
   isNewer,
   performUpdate,
+  recordLatestTag,
+  refreshLatestTag,
   reinstallCommand,
   replaceFile,
+  skipUpdate,
   tagFromLocation,
+  updateCheckDue,
 } from "./update.js";
 
 describe("compareVersions", () => {
@@ -171,6 +178,104 @@ describe("findUpdate", () => {
 
     await findUpdate({ current: "0.3.0-beta", target: "/x/index.js", check, signal });
     expect(check).toHaveBeenCalledWith(signal);
+  });
+});
+
+const HOUR = 60 * 60 * 1000;
+const DAY = 24 * HOUR;
+const NOW = Date.parse("2026-10-10T09:00:00.000Z");
+const at = (time: number) => new Date(time).toISOString();
+
+describe("updateCheckDue", () => {
+  it("is due before the first check, and a day after the last", () => {
+    expect(updateCheckDue({}, NOW)).toBe(true);
+    expect(updateCheckDue({ updateCheckedAt: at(NOW - 23 * HOUR) }, NOW)).toBe(false);
+    expect(updateCheckDue({ updateCheckedAt: at(NOW - DAY) }, NOW)).toBe(true);
+  });
+
+  it("is due when the last check cannot be read, or is ahead of the clock", () => {
+    expect(updateCheckDue({ updateCheckedAt: "yesterday" }, NOW)).toBe(true);
+    expect(updateCheckDue({ updateCheckedAt: at(NOW + HOUR) }, NOW)).toBe(true);
+  });
+});
+
+describe("cachedUpdateTag", () => {
+  it("is the last check's tag when it is newer than this version", () => {
+    expect(cachedUpdateTag({ latestTag: "v0.3.1-beta" }, "0.3.0-beta", NOW)).toBe("v0.3.1-beta");
+  });
+
+  it.each([
+    ["no check yet", {}],
+    ["the same release", { latestTag: "v0.3.0-beta" }],
+    ["an older release", { latestTag: "v0.2.5-beta" }],
+    ["a tag that is not a version", { latestTag: "nightly" }],
+    ["a tag that is not text", { latestTag: 3 }],
+  ])("is null for %s", (_case, notices) => {
+    expect(cachedUpdateTag(notices, "0.3.0-beta", NOW)).toBeNull();
+  });
+
+  it("is null for seven days after a no, even for a release out since", () => {
+    const skipped = { latestTag: "v0.4.0-beta", updateSkippedAt: at(NOW - 7 * DAY + 1) };
+
+    expect(cachedUpdateTag(skipped, "0.3.0-beta", NOW)).toBeNull();
+    expect(cachedUpdateTag(skipped, "0.3.0-beta", NOW + 1)).toBe("v0.4.0-beta");
+  });
+
+  it("asks again when the no is ahead of the clock", () => {
+    expect(cachedUpdateTag({ latestTag: "v0.3.1-beta", updateSkippedAt: at(NOW + HOUR) }, "0.3.0-beta", NOW)).toBe(
+      "v0.3.1-beta",
+    );
+  });
+});
+
+describe("the daily check's record", () => {
+  let dir: string;
+  let file: string;
+  const deps = (now: number): NoticesDeps => ({ path: file, now: () => now, env: {} });
+  const stored = () => JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), "clausona-update-notices-"));
+    file = path.join(dir, "notices.json");
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("notes the tag and when it was learned, keeping the rest", async () => {
+    writeFileSync(file, JSON.stringify({ starAsked: true }));
+
+    await recordLatestTag(deps(NOW), "v0.3.1-beta");
+    expect(stored()).toEqual({ starAsked: true, latestTag: "v0.3.1-beta", updateCheckedAt: at(NOW) });
+  });
+
+  it("notes a no", async () => {
+    writeFileSync(file, JSON.stringify({ latestTag: "v0.3.1-beta" }));
+
+    await skipUpdate(deps(NOW));
+    expect(stored()).toEqual({ latestTag: "v0.3.1-beta", updateSkippedAt: at(NOW) });
+  });
+
+  it("is written by the background check when it learns a tag, and left alone when it does not", async () => {
+    writeFileSync(file, JSON.stringify({ updateCheckedAt: at(NOW) }));
+
+    await refreshLatestTag(deps(NOW + 1000), async () => null);
+    expect(stored()).toEqual({ updateCheckedAt: at(NOW) });
+
+    await refreshLatestTag(deps(NOW + 1000), async () => "v0.3.1-beta");
+    expect(stored()).toEqual({ updateCheckedAt: at(NOW + 1000), latestTag: "v0.3.1-beta" });
+  });
+
+  it("is written by the dashboard's check too", async () => {
+    const remembered: string[] = [];
+    const updater = createUpdater({
+      check: async () => "v99.0.0",
+      remember: (tag) => remembered.push(tag),
+    });
+
+    expect((await updater.find())?.latest).toBe("99.0.0");
+    expect(remembered).toEqual(["v99.0.0"]);
   });
 });
 

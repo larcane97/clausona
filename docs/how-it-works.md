@@ -407,9 +407,14 @@ own, and nothing is sent to a third party.
 The one thing that leaves your machine is the plan-quota lookup: each profile's own
 credential is sent to that profile's own provider endpoint (`api.anthropic.com` for
 Claude, `chatgpt.com` for Codex) to read its limits, and to renew a lapsed token.
-Nothing else is transmitted, and `clausona list --no-quota` skips it entirely. An API
-profile is not part of this: clausona makes no request on its behalf, but it does hand
+Nothing else of yours is transmitted, and `clausona list --no-quota` skips it entirely. An
+API profile is not part of this: clausona makes no request on its behalf, but it does hand
 that profile's key to Claude Code, which then talks to the endpoint you configured.
+
+The only other request asks github.com which clausona release is the latest, so that
+clausona can offer an update. The dashboard makes it each time it opens; other commands
+make it at most once a day, in the background, and ask about the release on a later run.
+It goes to clausona's releases page and carries nothing from your profiles.
 
 ```
 ~/.clausona/
@@ -419,12 +424,13 @@ that profile's key to Claude Code, which then talks to the endpoint you configur
 │                    #   Keychain)
 ├── usage.json       # per-profile usage history
 ├── quota.json       # cached plan-quota readings (5-minute freshness)
-├── notices.json     # the day the dashboard first opened, and whether it has asked
-│                    #   for a GitHub star (it asks once)
+├── notices.json     # the first day you used clausona and whether it has asked for a
+│                    #   GitHub star (it asks once); the latest release the daily check
+│                    #   found, when it checked, and when you last said no to an update
 ├── cache/           # launch scripts the shell hook reads (owner-only; never an API
 │                    #   profile's, so never a key)
-├── locks/           # short-lived locks: registry and usage.json writes, per-profile
-│                    #   credential renewal
+├── locks/           # short-lived locks: registry, usage.json and notices.json writes,
+│                    #   per-profile credential renewal
 └── backups/
     ├── claude/      # what clausona set aside from claude profile directories,
     │                #   <profile>/<name>.<timestamp>

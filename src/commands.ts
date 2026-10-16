@@ -25,6 +25,7 @@ import {
   currentInstallTarget,
   isNewer,
   performUpdate,
+  refreshLatestTag,
   reinstallCommand,
   versionOfTag,
 } from "./core/update.js";
@@ -200,6 +201,7 @@ const commandFlags: Record<string, { flags: string[]; prefixes?: string[]; badUs
   version: { flags: [] },
   "_shell-env": { flags: ["--json"] },
   _launch: { flags: ["--json"] },
+  "_update-check": { flags: [] },
 };
 
 function validateFlags(command: string, args: string[]) {
@@ -1770,6 +1772,13 @@ export async function runCommand(command: string, args: string[]) {
 
     case "_track-usage": {
       await trackUsage();
+      return "";
+    }
+
+    case "_update-check": {
+      // Internal: the day's release check, which a command starts in the background
+      // (after-command.ts) for the commands after it to offer.
+      await refreshLatestTag();
       return "";
     }
 

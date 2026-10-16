@@ -14,7 +14,8 @@ export type StarPopupState =
   | { phase: "starring" }
   | { phase: "done"; outcome: StarOutcome };
 
-export const STAR_POPUP_GRACE_MS = 700;
+// Kept in star.ts, which the shell's questions read without loading React.
+export { STAR_POPUP_GRACE_MS } from "../../core/star.js";
 
 /** The popup's keys, by what it shows: none while it starts, or while it waits to be answered. */
 export function starPopupHints(state: StarPopupState): { keys: string; action: string }[] {
