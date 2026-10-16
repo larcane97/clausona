@@ -5,9 +5,9 @@
 # that. The assembled plugin stays in a temp directory (printed first) so its results can be read
 # afterwards; the OS cleans it up.
 #
-# usage: scripts/plugin-eval.sh <superset-fleet|herdr-fleet|orca-fleet> [claude plugin eval options]
+# usage: scripts/plugin-eval.sh <superset-fleet|herdr-fleet|orca-fleet|tmux-fleet> [claude plugin eval options]
 set -eu
-usage="usage: scripts/plugin-eval.sh <superset-fleet|herdr-fleet|orca-fleet> [claude plugin eval options]"
+usage="usage: scripts/plugin-eval.sh <superset-fleet|herdr-fleet|orca-fleet|tmux-fleet> [claude plugin eval options]"
 [ $# -ge 1 ] || { echo "$usage" >&2; exit 2; }
 p="$1"; shift
 repo="$(cd "$(dirname "$0")/.." && pwd)"
