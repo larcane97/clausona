@@ -1,6 +1,6 @@
 ---
 name: fleet-core
-description: Shared rules for the clausona fleet skills (superset-fleet, herdr-fleet, orca-fleet). Load it only when one of those skills tells you to; it is not a task on its own.
+description: Shared rules for the clausona fleet skills (superset-fleet, herdr-fleet, orca-fleet, tmux-fleet). Load it only when one of those skills tells you to; it is not a task on its own.
 user-invocable: false
 ---
 
@@ -11,8 +11,8 @@ a worker: a separate Claude Code or Codex session in its own git worktree, on a 
 profile is one account or one API endpoint, with its own sign-in and limits. Profiles of one tool
 share plugins and settings. `csn` is short for `clausona`.
 
-The runner skill that loaded this one (Superset, herdr or Orca) says how to create worktrees, start
-workers, read them and remove them. This skill says everything else.
+The runner skill that loaded this one (Superset, herdr, Orca or tmux) says how to create worktrees,
+start workers, read them and remove them. This skill says everything else.
 
 **Shells.** Commands here are written for a POSIX shell. Claude Code runs them in Bash, on Windows
 too (Git Bash). Codex on Windows runs PowerShell: there, read `"$(cat <file>)"` as
@@ -148,7 +148,7 @@ safe choice; otherwise tell the user. A permission prompt is never such a notice
 Write every brief and follow-up to a file. Never paste one into a command line: the shell would
 run any `$( )` or backticks in it. Start each one with a word, not `-`.
 
-For herdr and Orca:
+For herdr, Orca and tmux:
 
 - Write the brief to `<worktree>/.fleet-brief.md`, and follow-ups to
   `<worktree>/.fleet-followup-<n>.md`.
@@ -174,7 +174,7 @@ Keep a table with one row per task: task, profile, model, workspace, worktree, b
 handle, and state (planned, running, waiting on the user, done, blocked, retired). Update it after
 every event.
 
-For herdr and Orca, a worker's last line is exactly one of:
+For herdr, Orca and tmux, a worker's last line is exactly one of:
 
 - `FLEET_WORKER_DONE: <one-line summary>`
 - `FLEET_WORKER_BLOCKED: <what it needs>`
@@ -223,8 +223,8 @@ When a wait returns, read that worker's screen (the runner skill says how):
 1. Pick another profile by section 3.
 2. Start it in the same worktree (the runner skill says how). Give it the brief plus this
    paragraph: "A previous worker on another account stopped at its limit before finishing. Check
-   `git status` and `git log` in this worktree, then continue the task." For herdr and Orca, write
-   that to `.fleet-brief.md` again and send the one line.
+   `git status` and `git log` in this worktree, then continue the task." For herdr, Orca and tmux,
+   write that to `.fleet-brief.md` again and send the one line.
 3. Close the old worker. Record the new handle in the table, and wait on it from now on.
 
 ## 10. Judging a worker done

@@ -1,7 +1,7 @@
 {
   "name": "clausona",
   "version": "0.2.0",
-  "description": "Old name for superset-fleet; installs it. Install superset-fleet@clausona, herdr-fleet@clausona or orca-fleet@clausona instead.",
+  "description": "Old name for superset-fleet; installs it. Install superset-fleet@clausona, herdr-fleet@clausona, orca-fleet@clausona or tmux-fleet@clausona instead.",
   "author": { "name": "larcane97", "url": "https://github.com/larcane97" },
   "homepage": "https://github.com/larcane97/clausona/blob/main/docs/usecases/superset-fleet.md",
   "repository": "https://github.com/larcane97/clausona",

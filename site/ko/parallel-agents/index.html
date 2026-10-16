@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Claude Code(클로드 코드) 에이전트를 여러 계정과 모델로 병렬 실행하기 | clausona</title>
-  <meta name="description" content="서브에이전트 대신 에이전트마다 독립된 Claude Code 세션을 띄우고, 각각 다른 계정이나 DeepSeek 같은 API 모델에 맡기는 방법. 어느 터미널에서든 되고, Superset, herdr, Orca에서는 조율 플러그인이 배정과 검증을 맡습니다.">
+  <meta name="description" content="서브에이전트 대신 에이전트마다 독립된 Claude Code 세션을 띄우고, 각각 다른 계정이나 DeepSeek 같은 API 모델에 맡기는 방법. 어느 터미널에서든 되고, Superset, herdr, Orca, tmux에서는 조율 플러그인이 배정과 검증을 맡습니다.">
   <link rel="canonical" href="https://larcane97.github.io/clausona/ko/parallel-agents/">
   <link rel="alternate" hreflang="en" href="https://larcane97.github.io/clausona/guides/parallel-claude-code-agents/">
   <link rel="alternate" hreflang="ko" href="https://larcane97.github.io/clausona/ko/parallel-agents/">
@@ -16,7 +16,7 @@
   <meta property="og:url" content="https://larcane97.github.io/clausona/ko/parallel-agents/">
   <meta property="og:image" content="https://larcane97.github.io/clausona/assets/social-preview.png">
   <meta property="article:published_time" content="2026-10-08">
-  <meta property="article:modified_time" content="2026-10-14">
+  <meta property="article:modified_time" content="2026-10-16">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" href="../../favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -28,9 +28,9 @@
     "@context": "https://schema.org",
     "@type": "TechArticle",
     "headline": "Claude Code 에이전트를 여러 계정과 모델로 병렬 실행하기",
-    "description": "서브에이전트 대신 에이전트마다 독립된 Claude Code 세션을 띄우고, 각각 다른 계정이나 DeepSeek 같은 API 모델에 맡기는 방법. 어느 터미널에서든 되고, Superset, herdr, Orca에서는 조율 플러그인이 배정과 검증을 맡습니다.",
+    "description": "서브에이전트 대신 에이전트마다 독립된 Claude Code 세션을 띄우고, 각각 다른 계정이나 DeepSeek 같은 API 모델에 맡기는 방법. 어느 터미널에서든 되고, Superset, herdr, Orca, tmux에서는 조율 플러그인이 배정과 검증을 맡습니다.",
     "datePublished": "2026-10-08",
-    "dateModified": "2026-10-14",
+    "dateModified": "2026-10-16",
     "inLanguage": "ko",
     "image": "https://larcane97.github.io/clausona/assets/superset-fleet.gif",
     "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
@@ -60,7 +60,7 @@
         "name": "워커를 정리하다 작업이 날아갈 수 있나요?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "작업이 검증된 뒤에만 정리합니다. 그때도 브랜치가 push되고 worktree가 깨끗해야 합니다. Superset에서는 스킬의 헬퍼가 워크스페이스를 지우기 직전에 브랜치와 worktree를 다시 확인하고, 하나라도 깨끗하지 않으면 거부합니다. herdr와 Orca는 커밋하지 않은 변경이 있는 worktree를 스스로 지우지 않습니다."
+          "text": "작업이 검증된 뒤에만 정리합니다. 그때도 브랜치가 push되고 worktree가 깨끗해야 합니다. Superset에서는 스킬의 헬퍼가 워크스페이스를 지우기 직전에 브랜치와 worktree를 다시 확인하고, 하나라도 깨끗하지 않으면 거부합니다. herdr와 Orca는 커밋하지 않은 변경이 있는 worktree를 스스로 지우지 않습니다. tmux에서는 플러그인이 --force 없이 git worktree remove를 쓰기 때문에 git이 지우지 않습니다."
         }
       },
       {
@@ -68,7 +68,7 @@
         "name": "에이전트마다 다른 계정을 쓰려면 Superset이 꼭 필요한가요?",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "아니요. 어느 실행 환경이든 clausona run claude:work로 띄우면 그 계정으로 Claude Code가 돌아갑니다. Superset, herdr, Orca용 조율 플러그인은 그 위에 계획과 검증 같은 조율을 더할 뿐입니다."
+          "text": "아니요. 어느 실행 환경이든 clausona run claude:work로 띄우면 그 계정으로 Claude Code가 돌아갑니다. Superset, herdr, Orca, tmux용 조율 플러그인은 그 위에 계획과 검증 같은 조율을 더할 뿐입니다."
         }
       },
       {
@@ -102,17 +102,17 @@
       <nav class="crumbs" aria-label="현재 위치"><a href="../../">clausona</a> / <a href="../">가이드</a></nav>
       <h1>Claude Code 에이전트를 여러 계정과 모델로 병렬 실행하기</h1>
       <p class="lead">작업 하나를 다섯 갈래로 나눌 때 보통은 Claude Code(클로드 코드)의 서브에이전트를 씁니다. 부모 세션이 다섯 개를 한꺼번에 띄워 놓고, 각자 일을 마치면 돌려준 결과만 받아 보는 식이죠.</p>
-      <p class="updated"><time datetime="2026-10-14">2026년 10월 14일</time> 업데이트</p>
+      <p class="updated"><time datetime="2026-10-16">2026년 10월 16일</time> 업데이트</p>
       <p>그런데 서브에이전트는 일하는 과정이 보이지 않습니다. 다섯 개 중 하나만 골라 끼어들기도 어렵고요. 게다가 다섯 개가 모두 같은 계정을 씁니다.</p>
       <p>이 글에서는 에이전트마다 독립된 Claude Code 세션을 띄우는 방법을 다룹니다. 세션마다 지켜보다가 끼어들 수 있고, 각 세션을 정해 둔 계정이나 모델로 보낼 수 있습니다. 회사 계정과 두 번째 구독 계정은 물론, DeepSeek 같은 API 모델도 됩니다.</p>
 
       <div class="answer">
         <p>핵심은 세션마다 프로필을 붙이는 것입니다. <a href="https://github.com/larcane97/clausona">clausona</a>로 띄운 세션은 그 프로필(계정이나 API 엔드포인트)로 돌아가고, 띄우는 곳은 어느 실행 환경이든 상관없습니다.</p>
-        <p>작업을 나누고 맡기는 일까지 넘기고 싶다면 쓰는 도구에 맞는 조율 플러그인을 설치합니다. <a href="https://superset.sh">Superset</a>용은 <code>superset-fleet</code>이고, herdr와 Orca용도 따로 있습니다(<code>herdr-fleet</code>, <code>orca-fleet</code>).</p>
+        <p>작업을 나누고 맡기는 일까지 넘기고 싶다면 쓰는 도구에 맞는 조율 플러그인을 설치합니다. <a href="https://superset.sh">Superset</a>용은 <code>superset-fleet</code>이고, herdr, Orca, tmux용도 따로 있습니다(<code>herdr-fleet</code>, <code>orca-fleet</code>, <code>tmux-fleet</code>).</p>
         <p>플러그인을 쓰면 Claude Code나 Codex 세션 하나가 작업을 나누고, 규칙대로 고른 프로필로 작업마다 워커를 띄웁니다. 그 뒤로는 워커를 지켜보며 질문에 답합니다. 결과를 검증한 뒤 정리하는 것까지가 플러그인의 몫입니다.</p>
         <p>필요한 것 하나만 설치하고 요청하면 됩니다.</p>
 <pre data-copy><code>claude plugin marketplace add larcane97/clausona
-claude plugin install superset-fleet@clausona   # herdr-fleet, orca-fleet도 같은 방식</code></pre>
+claude plugin install superset-fleet@clausona   # herdr-fleet, orca-fleet, tmux-fleet도 같은 방식</code></pre>
         <p>Codex에서는 <code>codex plugin marketplace add</code>와 <code>codex plugin add</code>로 똑같이 설치하고, <code>fleet-core@clausona</code>도 함께 추가합니다.</p>
         <p>"이 작업들을 Superset에서 내 계정들에 나눠 줘: <code>notes list</code>에 <code>--json</code> 옵션 추가, <code>src/parse.ts</code> 테스트 작성, <code>docs/</code>의 깨진 링크 수정."</p>
       </div>
@@ -149,6 +149,7 @@ claude plugin install superset-fleet@clausona   # herdr-fleet, orca-fleet도 같
       <p>어느 터미널이든 <code>clausona run claude:work</code>로 그 계정의 Claude Code 세션을 띄웁니다. 도구마다 다른 건 이 명령을 넣는 자리뿐이에요.</p>
       <p><strong>tmux</strong>에서는 새 창으로 띄우면 됩니다.</p>
 <pre data-copy><code>tmux new-window 'clausona run claude:work'</code></pre>
+      <p>tmux에서는 <code>tmux-fleet</code> 플러그인이 조율을 맡습니다. GUI가 필요 없어서 SSH로 접속한 서버에서도 되고, 자세한 내용은 <a href="../parallel-agents-in-tmux/">tmux 가이드</a>에 있습니다.</p>
       <p><a href="https://github.com/herdrdev/herdr">herdr</a>는 에이전트 창을 유지하고 창마다 상태를 보여 주는 터미널 런타임입니다. 창을 하나 열고 그 안에서 <code>clausona run claude:work</code>를 실행하면 됩니다. herdr에서는 <code>herdr-fleet</code> 플러그인이 조율을 맡아요. 자세한 내용은 <a href="../parallel-agents-in-herdr/">herdr 가이드</a>에 있습니다.</p>
       <p><a href="https://github.com/stablyai/orca">Orca</a>는 코딩 에이전트를 각자의 git worktree에서 나란히 돌리는 오픈소스 데스크톱 앱입니다. 어떤 CLI 에이전트든 실행할 수 있습니다. Orca 터미널에서 <code>clausona run claude:work</code>를 실행하면 그 계정으로 Claude Code가 뜹니다.</p>
       <p>참고로 Orca에는 Claude와 Codex 계정을 바꾸는 자체 기능이 있습니다. Orca에서는 <code>orca-fleet</code> 플러그인이 조율을 맡고, 자세한 내용은 <a href="../parallel-agents-in-orca/">Orca 가이드</a>에 있습니다.</p>
@@ -161,7 +162,7 @@ claude plugin install superset-fleet@clausona   # herdr-fleet, orca-fleet도 같
         <li>결과 검증</li>
         <li>워커 정리</li>
       </ul>
-      <p>여기부터는 Superset의 <code>superset-fleet</code>을 예로 들어 설명합니다. herdr와 Orca도 흐름은 같아요.</p>
+      <p>여기부터는 Superset의 <code>superset-fleet</code>을 예로 들어 설명합니다. herdr, Orca, tmux도 흐름은 같아요.</p>
 
       <h2 id="how">조율 스킬이 동작하는 방식</h2>
       <p>Superset 안의 Claude Code나 Codex 세션 하나와 대화합니다. 이 세션이 오케스트레이터입니다.</p>
@@ -192,7 +193,7 @@ claude plugin install superset-fleet@clausona   # herdr-fleet, orca-fleet도 같
       <p>대신 스킬을 쓰면 이 선택을 규칙에 맡길 수 있습니다. 오케스트레이터가 따르는 순서는 이렇습니다.</p>
       <ol>
         <li>대화에서 말한 것</li>
-        <li><code>~/.clausona/fleet.json</code>(세 조율 플러그인이 함께 씁니다)</li>
+        <li><code>~/.clausona/fleet.json</code>(네 조율 플러그인이 함께 씁니다)</li>
         <li>기본값</li>
       </ol>
 <pre data-copy><code>{
@@ -249,7 +250,7 @@ claude plugin install superset-fleet@clausona   # herdr-fleet, orca-fleet도 같
             <tr><th scope="row">에이전트 하나에 직접 입력</th><td>아니요</td><td class="is-shared">예</td></tr>
             <tr><th scope="row">에이전트마다 다른 계정</th><td>아니요, 모두 부모 계정</td><td class="is-shared">예, clausona 프로필마다</td></tr>
             <tr><th scope="row">에이전트마다 DeepSeek 같은 API 모델</th><td>아니요, 같은 계정의 Claude 모델만</td><td class="is-shared">예, API 프로필로</td></tr>
-            <tr><th scope="row">규칙과 계정별 사용량에 따른 배정</th><td>아니요</td><td class="is-shared">route나 조율 플러그인으로<small>조율 플러그인은 Superset, herdr, Orca</small></td></tr>
+            <tr><th scope="row">규칙과 계정별 사용량에 따른 배정</th><td>아니요</td><td class="is-shared">route나 조율 플러그인으로<small>조율 플러그인은 Superset, herdr, Orca, tmux</small></td></tr>
             <tr><th scope="row">정리 전 결과 검증</th><td>아니요</td><td class="is-shared">조율 플러그인으로<small>브랜치와 diff, 검사</small></td></tr>
           </tbody>
         </table>
@@ -298,16 +299,16 @@ claude plugin install superset-fleet@clausona</code></pre>
       <h3>오케스트레이터가 자기 계정으로 워커를 띄우나요?</h3>
       <p>아니요. 오케스트레이터가 쓰는 프로필은 조율만 하고, 워커는 다른 프로필로 띄웁니다.</p>
       <h3>워커를 정리하다 작업이 날아갈 수 있나요?</h3>
-      <p>작업이 검증된 뒤에만 정리합니다. 그때도 브랜치가 push되고 worktree가 깨끗해야 합니다. Superset에서는 스킬의 헬퍼가 워크스페이스를 지우기 직전에 브랜치와 worktree를 다시 확인하고, 하나라도 깨끗하지 않으면 거부합니다. herdr와 Orca는 커밋하지 않은 변경이 있는 worktree를 스스로 지우지 않습니다.</p>
+      <p>작업이 검증된 뒤에만 정리합니다. 그때도 브랜치가 push되고 worktree가 깨끗해야 합니다. Superset에서는 스킬의 헬퍼가 워크스페이스를 지우기 직전에 브랜치와 worktree를 다시 확인하고, 하나라도 깨끗하지 않으면 거부합니다. herdr와 Orca는 커밋하지 않은 변경이 있는 worktree를 스스로 지우지 않습니다. tmux에서는 플러그인이 <code>--force</code> 없이 <code>git worktree remove</code>를 쓰기 때문에 git이 지우지 않습니다.</p>
       <h3>에이전트마다 다른 계정을 쓰려면 Superset이 꼭 필요한가요?</h3>
-      <p>아니요. 어느 실행 환경이든 <code>clausona run claude:work</code>로 띄우면 그 계정으로 Claude Code가 돌아갑니다. Superset, herdr, Orca용 조율 플러그인은 그 위에 계획과 검증 같은 조율을 더할 뿐입니다.</p>
+      <p>아니요. 어느 실행 환경이든 <code>clausona run claude:work</code>로 띄우면 그 계정으로 Claude Code가 돌아갑니다. Superset, herdr, Orca, tmux용 조율 플러그인은 그 위에 계획과 검증 같은 조율을 더할 뿐입니다.</p>
       <h3>작업 중 계정이 한도에 걸리면 어떻게 되나요?</h3>
       <p>조율 플러그인을 쓰는 경우, 오케스트레이터가 규칙이 허용하는 다른 프로필로 같은 워크스페이스에서 작업을 넘깁니다. 멈춘 워커의 터미널은 닫습니다.</p>
 
       <section class="cta" aria-labelledby="try">
         <h2 id="try">써 보기</h2>
         <p>clausona와 플러그인은 무료 오픈소스입니다. 계정을 아직 등록하지 않았다면 <a href="../">계정 설정 가이드</a>부터 보세요. 조율 플러그인은 그다음에 설치하면 돼요.</p>
-        <p>전체 설명은 GitHub의 사용 사례 문서(<a href="https://github.com/larcane97/clausona/blob/main/docs/usecases/superset-fleet.md">Superset</a>, <a href="https://github.com/larcane97/clausona/blob/main/docs/usecases/herdr-fleet.md">herdr</a>, <a href="https://github.com/larcane97/clausona/blob/main/docs/usecases/orca-fleet.md">Orca</a>)에 있습니다. 써 보고 막히는 곳은 <a href="https://github.com/larcane97/clausona/issues">이슈</a>로, 쓸 만했다면 별로 알려 주세요.</p>
+        <p>전체 설명은 GitHub의 사용 사례 문서(<a href="https://github.com/larcane97/clausona/blob/main/docs/usecases/superset-fleet.md">Superset</a>, <a href="https://github.com/larcane97/clausona/blob/main/docs/usecases/herdr-fleet.md">herdr</a>, <a href="https://github.com/larcane97/clausona/blob/main/docs/usecases/orca-fleet.md">Orca</a>, <a href="https://github.com/larcane97/clausona/blob/main/docs/usecases/tmux-fleet.md">tmux</a>)에 있습니다. 써 보고 막히는 곳은 <a href="https://github.com/larcane97/clausona/issues">이슈</a>로, 쓸 만했다면 별로 알려 주세요.</p>
       </section>
     </article>
   </main>

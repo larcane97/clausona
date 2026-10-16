@@ -8,7 +8,7 @@ With both, one Claude Code or Codex session can split a job across several Orca 
 worker on a different account or an API model, and you can open any worker's tab and type into it.
 
 The `orca-fleet` plugin from this repo teaches the coordinating session how to do it. The same
-pattern runs in [Superset](superset-fleet.md) and [herdr](herdr-fleet.md).
+pattern runs in [Superset](superset-fleet.md), [herdr](herdr-fleet.md) and [tmux](tmux-fleet.md).
 
 ## Why not subagents?
 

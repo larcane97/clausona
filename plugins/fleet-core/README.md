@@ -2,8 +2,9 @@
 
 The shared rules behind clausona's fleet plugins:
 [superset-fleet](https://github.com/larcane97/clausona/blob/main/docs/usecases/superset-fleet.md),
-[herdr-fleet](https://github.com/larcane97/clausona/blob/main/docs/usecases/herdr-fleet.md) and
-[orca-fleet](https://github.com/larcane97/clausona/blob/main/docs/usecases/orca-fleet.md). Each of
+[herdr-fleet](https://github.com/larcane97/clausona/blob/main/docs/usecases/herdr-fleet.md),
+[orca-fleet](https://github.com/larcane97/clausona/blob/main/docs/usecases/orca-fleet.md) and
+[tmux-fleet](https://github.com/larcane97/clausona/blob/main/docs/usecases/tmux-fleet.md). Each of
 those lets one Claude Code or Codex session run parallel workers, every one on its own clausona
 account or API model. The runner plugin says how to drive its tool. This one decides which account
 gets each task, and when a worker's work counts as done.
@@ -21,7 +22,7 @@ runs on.
 ## What you need
 
 [clausona](https://github.com/larcane97/clausona), and one of the fleet plugins above along with the
-runner it's for: Superset, herdr or Orca.
+runner it's for: Superset, herdr, Orca or tmux.
 
 ## Install
 

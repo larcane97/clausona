@@ -19,6 +19,11 @@
       "description": "Run parallel agents in Orca worktrees, each on its own clausona account or API model."
     },
     {
+      "name": "tmux-fleet",
+      "source": "./plugins/tmux-fleet",
+      "description": "Run parallel agents in tmux windows, each on its own clausona account or API model."
+    },
+    {
       "name": "routing",
       "source": "./plugins/routing",
       "description": "Run Claude Code or Codex on whichever clausona account has quota left."
