@@ -28,6 +28,7 @@ const USAGE = `usage: superset-host.mjs <command>
   projects
   workspaces list [--project <id>]
   workspaces create --project <id> --name <name> --branch <branch> [--base-branch <branch>] [--skip-branch-prefix]
+  workspaces rename <id> --name <name>
   workspaces delete <id>
   agents configs
   agents add-config --label <label> --profile <profile> [--command <path>] [-- <tool args>...]
@@ -121,8 +122,32 @@ async function call(host, procedure, input, { mutation = false } = {}) {
         "`claude plugin update superset-fleet@clausona` (in Codex, `codex plugin marketplace upgrade`, then `codex plugin add superset-fleet@clausona`), or log the Superset CLI in with `superset auth login` and use it instead.",
     );
   }
-  if (!response.ok) throw new CliError(`${procedure} failed: ${message ?? `HTTP ${response.status}`}`, response.status);
+  if (!response.ok) {
+    const reason = typeof message === "string" ? readIssues(message) : `HTTP ${response.status}`;
+    throw new CliError(`${procedure} failed: ${reason}`, response.status);
+  }
   return body?.result?.data?.json;
+}
+
+// The host checks each input with zod and, when it fails, sends the issues back as a JSON list.
+// Read out as `field: message`, with the expected format when there is one; any other message
+// is kept as it is.
+function readIssues(message) {
+  let issues;
+  try {
+    issues = JSON.parse(message);
+  } catch {
+    return message;
+  }
+  if (!Array.isArray(issues) || issues.length === 0 || !issues.every((i) => typeof i?.message === "string")) {
+    return message;
+  }
+  return issues
+    .map((i) => {
+      const field = Array.isArray(i.path) && i.path.length > 0 ? i.path.join(".") : "input";
+      return `${field}: ${i.message}${typeof i.format === "string" ? ` (expected a ${i.format})` : ""}`;
+    })
+    .join("; ");
 }
 
 function positiveInt(text, flag) {
@@ -372,6 +397,13 @@ const COMMANDS = {
         { mutation: true },
       ),
   },
+  // The name is what the Superset sidebar shows.
+  "workspaces rename": {
+    options: { name: str },
+    required: ["name"],
+    positionals: 1,
+    run: (host, { name }, [id]) => call(host, "workspace.update", { id, name }, { mutation: true }),
+  },
   // Stops the workspace's terminals and removes its worktree, after deleteWorkspace's checks.
   "workspaces delete": {
     positionals: 1,
@@ -519,6 +551,7 @@ async function main(argv) {
   if (positionals.length !== want) throw new CliError(`${name} takes ${want} argument(s)\n${USAGE}`);
   for (const key of command.required ?? []) {
     if (values[key] === undefined) throw new CliError(`${name}: --${key} is required`);
+    if ([values[key]].flat().some((v) => !v.trim())) throw new CliError(`${name}: --${key} must not be empty`);
   }
   const host = command.local ? null : findHost();
   return command.run(host, values, positionals, extra);

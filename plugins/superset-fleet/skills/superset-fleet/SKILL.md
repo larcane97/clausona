@@ -48,6 +48,7 @@ Below, `H` means `node <base>/scripts/superset-host.mjs`. `H trust`, `H terminal
 | Projects | `superset projects list --json` | `H projects` |
 | Agent configs | `superset agents list --local --json` | `H agents configs` |
 | New workspace | `superset ws create --local --project <id> --name <name> --branch <branch> --json` | `H workspaces create --project <id> --name <name> --branch <branch>` |
+| Rename workspace | `superset ws update --local <id> --name <name> --json` | `H workspaces rename <id> --name <name>` |
 | Worktree path | `superset ws get --local <id> --json` | `H workspaces list --project <id>` (`worktreePath`) |
 | Start a worker | `superset agents create --local --workspace <id> --agent <config> --prompt "$(cat <brief file>)" --json` | `H agents run --workspace <id> --agent <config> --prompt-file <brief file>` |
 | Hand a task over | `superset agents create --local --workspace <id> --agent <config> --from-terminal <terminal> --json` | `H agents run --workspace <id> --agent <config> --from-terminal <terminal>` |
@@ -90,7 +91,10 @@ When a profile the plan needs has no config:
 For each task: create the workspace, make its worktree trusted for the worker's profile, then
 start the worker. Name the workspace `<short task> · <profile label>`, for example
 `Paths · work (Opus 5.5)`, so the Superset sidebar shows which account runs where. Keep it under 26
-characters: the sidebar cuts longer names.
+characters: the sidebar cuts longer names. The name stays what it was at creation, so rename the
+workspace ("Rename workspace" in the table) when it stops being true: when its task moves to another
+profile (section 5), or when you give its worker a different task. Keep the same
+`<short task> · <profile label>` form.
 
 1. **Trust.**
    - **Claude Code profiles:** before starting, run
@@ -141,7 +145,8 @@ Pick another profile by `fleet-core` section 3.
 - **Other tool:** start a new worker in the same workspace with the brief and the hand-over
   paragraph from `fleet-core` section 9.
 
-Then close the old terminal, record the new terminal id, and wait on it from now on.
+Then close the old terminal, and rename the workspace for the new profile (section 3), for example
+to `Paths · side (Opus 5.5)`. Record the new terminal id, and wait on it from now on.
 
 ## 6. Retiring
 

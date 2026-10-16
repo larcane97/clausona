@@ -116,7 +116,8 @@ The orchestrator then:
    which account runs where. It starts each worker with its brief. The brief tells the worker
    to push its branch, to start no agents of its own, and to report done or blocked.
 3. Reads the workers as they go. It answers their questions, and hands a task to another
-   profile if an account hits its limit.
+   profile if an account hits its limit. It then renames the workspace, so the sidebar shows
+   the account that now runs it.
 4. Checks each finished branch itself: the commits, the diff, and the checks the brief named.
    It tells you what it checked and what the worker only claimed.
 5. Offers to retire the finished workers.

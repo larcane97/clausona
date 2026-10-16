@@ -257,6 +257,94 @@ describe("workspaces and terminals", () => {
     expect(seen).toEqual([]);
   });
 
+  it("renames a workspace and prints the host's row, as create does", async () => {
+    const row = {
+      id: "w1",
+      projectId: "p1",
+      name: "Docs · work (Opus 5.5)",
+      worktreePath: "/wt/w1",
+      branch: "fleet/t1",
+    };
+    replies["workspace.update"] = { json: row };
+    const r = await run(["workspaces", "rename", "w1", "--name", "Docs · work (Opus 5.5)"]);
+    expect(r.stderr).toBe("");
+    expect(JSON.parse(r.stdout)).toEqual(row);
+    expect(seen.map((s) => [s.method, s.procedure, s.input])).toEqual([
+      ["POST", "workspace.update", { id: "w1", name: "Docs · work (Opus 5.5)" }],
+    ]);
+  });
+
+  it("passes on the host's error for a workspace it cannot rename", async () => {
+    replies["workspace.update"] = { status: 404, error: "Workspace not found" };
+    const r = await run(["workspaces", "rename", "0b7c6a3e-5d1f-4c2a-9e8b-1f2d3c4b5a69", "--name", "Docs"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/workspace\.update failed: Workspace not found/);
+    expect(r.stderr).not.toMatch(/API has changed/);
+  });
+
+  it("reads out the host's input check by field instead of printing its raw JSON", async () => {
+    // What the real host (desktop v1.37) sends for an id that is not a UUID.
+    const issues = [
+      {
+        origin: "string",
+        code: "invalid_format",
+        format: "uuid",
+        pattern: "/^[0-9a-f-]+$/",
+        path: ["id"],
+        message: "Invalid input",
+      },
+    ];
+    replies["workspace.update"] = { status: 400, error: JSON.stringify(issues, null, 2) };
+    const r = await run(["workspaces", "rename", "w1", "--name", "Docs"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toBe("superset-host: workspace.update failed: id: Invalid input (expected a uuid)\n");
+  });
+
+  it("reports API drift when the host has no workspace.update", async () => {
+    const r = await run(["workspaces", "rename", "w1", "--name", "Docs"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/the Superset host API has changed \(workspace\.update is gone\)/);
+  });
+
+  it("refuses a rename without an id or a name, and calls nothing", async () => {
+    for (const [args, error] of [
+      [["workspaces", "rename", "--name", "Docs"], /workspaces rename takes 1 argument/],
+      [["workspaces", "rename", "w1"], /--name is required/],
+      [["workspaces", "rename", "w1", "--name", "  "], /--name must not be empty/],
+    ] as const) {
+      const r = await run([...args]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(error);
+    }
+    expect(seen).toEqual([]);
+  });
+
+  it("refuses a blank required option before it looks for a host", async () => {
+    rmSync(path.join(home, ".superset", "host"), { recursive: true, force: true });
+    for (const [args, error] of [
+      [
+        ["workspaces", "rename", "w1", "--name", "  "],
+        /^superset-host: workspaces rename: --name must not be empty\n$/,
+      ],
+      [
+        ["workspaces", "create", "--project", "p1", "--name", "", "--branch", "fleet/t1"],
+        /^superset-host: workspaces create: --name must not be empty\n$/,
+      ],
+      [
+        ["terminals", "read", "--workspace", " ", "--terminal", "t1"],
+        /^superset-host: terminals read: --workspace must not be empty\n$/,
+      ],
+      [
+        ["terminals", "wait", "--workspace", "w1", "--workspace", ""],
+        /^superset-host: terminals wait: --workspace must not be empty\n$/,
+      ],
+    ] as const) {
+      const r = await run([...args]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(error);
+    }
+  });
+
   describe("deleting a workspace", () => {
     // The host deletes with force, so the helper is the only thing between a delete and a worker's
     // unsaved work. These run real git in a temporary repo with a temporary remote.
