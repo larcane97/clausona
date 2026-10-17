@@ -1,11 +1,14 @@
 import { realpathSync } from "node:fs";
+import { isatty } from "node:tty";
 import { pathToFileURL } from "node:url";
 
+import { askAfterCommand, defaultAfterCommandDeps, mayAsk } from "./after-command.js";
 import { runCommand } from "./commands.js";
+import { defaultNoticesDeps } from "./core/notices.js";
 import { spawnCommandSync } from "./core/process.js";
 import { claimStarPrompt, giveStar, recordStarAsked } from "./core/star.js";
 import { trackUsage } from "./core/track-usage.js";
-import { createUpdater, type UpdateOffer } from "./core/update.js";
+import { createUpdater, recordLatestTag, type UpdateOffer } from "./core/update.js";
 import { dropLauncherCompileCache } from "./installer.js";
 import { accent, ok, fail as xMark } from "./lib/cli-style.js";
 import { ExitError } from "./lib/json-errors.js";
@@ -66,7 +69,11 @@ async function renderTui(screen: TuiScreen): Promise<void> {
   const { waitUntilExit } = render(
     <App
       initialScreen={screen}
-      updater={screen === "dashboard" ? createUpdater() : undefined}
+      updater={
+        screen === "dashboard"
+          ? createUpdater({ remember: (tag) => void recordLatestTag(defaultNoticesDeps(), tag) })
+          : undefined
+      }
       // Every way to the dashboard lists Star on GitHub; only opening on it may bring the popup.
       star={{
         give: (signal) => giveStar(undefined, signal),
@@ -121,8 +128,9 @@ async function main() {
     return;
   }
 
+  let result: string;
   try {
-    const result = await runCommand(parsed.command, parsed.args);
+    result = await runCommand(parsed.command, parsed.args);
     if (result.startsWith("__OPEN_TUI__:")) {
       const screen = result.replace("__OPEN_TUI__:", "");
       if (TUI_SCREENS.has(screen)) {
@@ -143,6 +151,13 @@ async function main() {
     writeCommandResult(result);
   } catch (error) {
     process.exitCode = reportError(error);
+    return;
+  }
+
+  // At most one question, under the output, where someone can answer it (after-command.ts).
+  const terminal = { stdinTTY: isatty(0), stdoutTTY: isatty(1), env: process.env, exitCode: process.exitCode };
+  if (mayAsk(parsed.command, parsed.args, terminal)) {
+    await askAfterCommand({ ...defaultAfterCommandDeps(), separated: result.endsWith("\n") });
   }
 }
 

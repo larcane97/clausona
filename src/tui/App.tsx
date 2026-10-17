@@ -1541,7 +1541,10 @@ export function App({
       // An open update panel takes every key.
       if (updatePhase.kind === "confirm") {
         if (updateOffer && (key.return || input === "y" || input === "Y")) void installUpdate(updateOffer);
-        else if (key.escape || input === "n" || input === "N") setUpdatePhase({ kind: "idle" });
+        else if (key.escape || input === "n" || input === "N") {
+          setUpdatePhase({ kind: "idle" });
+          updater?.skip?.();
+        }
         return;
       }
       if (updatePhase.kind === "failed" || updatePhase.kind === "manual") {

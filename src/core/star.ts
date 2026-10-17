@@ -1,20 +1,34 @@
 /**
- * A star for clausona on GitHub: the dashboard's one-time question, and the star itself.
+ * A star for clausona on GitHub: the one-time question, and the star itself.
  *
- * The question is asked once, three days after the dashboard first opened, so it reaches people
- * who have used clausona for a while. Whether it has been asked lives in ~/.clausona/notices.json.
- * The star is given only when the user asks for it: through gh when it is signed in, and
- * otherwise by opening the repository's page, where the user presses Star themselves.
+ * The question is asked once, three days after clausona was first used - the dashboard opened, or
+ * a command run in a terminal - so it reaches people who have used clausona for a while. The
+ * dashboard and the shell (after-command.ts) share whether it has been asked, in
+ * ~/.clausona/notices.json: asked in one, it is never asked in the other. The star is given only
+ * when the user asks for it: through gh when it is signed in, and otherwise by opening the
+ * repository's page, where the user presses Star themselves.
  */
 
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import path from "node:path";
-
+import {
+  changeNotices,
+  defaultNoticesDeps,
+  type Notices,
+  type NoticesDeps,
+  onCi,
+  readNotices,
+  timeIn,
+} from "./notices.js";
 import { spawnCommand } from "./process.js";
 
 export const STAR_REPO = "larcane97/clausona";
 export const STAR_URL = `https://github.com/${STAR_REPO}`;
+
+/**
+ * How long a question is on screen before it takes an answer: keys typed a moment after it
+ * appears were meant for what was there before. The dashboard's popup and the shell's questions
+ * both wait this long.
+ */
+export const STAR_POPUP_GRACE_MS = 700;
 
 const ASK_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
 const GH_TIMEOUT_MS = 10_000;
@@ -22,87 +36,55 @@ const OPEN_TIMEOUT_MS = 5_000;
 
 // ─── The one-time question ───────────────────────────────────────────
 
-export type NoticesDeps = { path: string; now: () => number; env: NodeJS.ProcessEnv };
-
-type Notices = Record<string, unknown> & { firstDashboardAt?: unknown; starAsked?: unknown };
-
-export function noticesPath(clausonaDir: string = path.join(homedir(), ".clausona")): string {
-  return path.join(clausonaDir, "notices.json");
+/**
+ * The first day of use, or NaN before one is noted. A clausona that asked only on the dashboard
+ * noted it as `firstDashboardAt`; the earlier of the two counts.
+ */
+function firstUse(notices: Notices): number {
+  const days = [timeIn(notices, "firstUsedAt"), timeIn(notices, "firstDashboardAt")].filter((t) => !Number.isNaN(t));
+  return days.length === 0 ? Number.NaN : Math.min(...days);
 }
 
-function defaultNoticesDeps(): NoticesDeps {
-  return { path: noticesPath(), now: Date.now, env: process.env };
-}
-
-/** The record, `{}` when there is none yet, or null when the file is there but cannot be read as one. */
-async function readNotices(filePath: string): Promise<Notices | null> {
-  let text: string;
-  try {
-    text = await readFile(filePath, "utf8");
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT" ? {} : null;
-  }
-  try {
-    const value: unknown = JSON.parse(text);
-    return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Notices) : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Written aside and renamed into place, so a reader never sees half a file. */
-async function writeNotices(filePath: string, notices: Notices): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
-  const tmp = `${filePath}.tmp.${process.pid}`;
-  try {
-    await writeFile(tmp, `${JSON.stringify(notices, null, 2)}\n`, "utf8");
-    await rename(tmp, filePath);
-  } catch (error) {
-    await rm(tmp, { force: true }).catch(() => {});
-    throw error;
-  }
-}
-
-/** CI as most runners set it; `false` and `0` are how a user says it is not. */
-function onCi(env: NodeJS.ProcessEnv): boolean {
-  const value = env.CI?.trim().toLowerCase();
-  return value !== undefined && value !== "" && value !== "false" && value !== "0";
+/** `notices` with `now` noted as the first day of use, unless one is noted already. */
+export function withFirstUse(notices: Notices, now: number): Notices {
+  return Number.isNaN(firstUse(notices)) ? { ...notices, firstUsedAt: new Date(now).toISOString() } : notices;
 }
 
 /**
- * Whether the dashboard should ask for a star now: true once, ever. The first call notes the
- * day; the first call three days or more after it records the asking and answers true, so a
- * dashboard closed with the question open is not asked again. Anything that stops the record
+ * Whether to ask for a star now: true once, ever. The first call notes the day; the first call
+ * three days or more after it records the asking and answers true, so a question left unanswered
+ * - the dashboard closed, the terminal shut - is not asked again. Anything that stops the record
  * from being read or written answers false, so the question is never asked twice.
  */
 export async function claimStarPrompt(deps: NoticesDeps = defaultNoticesDeps()): Promise<boolean> {
   if (onCi(deps.env)) return false;
-  const notices = await readNotices(deps.path);
-  if (!notices || notices.starAsked === true) return false;
   const now = deps.now();
-  const first = typeof notices.firstDashboardAt === "string" ? Date.parse(notices.firstDashboardAt) : Number.NaN;
-  try {
-    if (Number.isNaN(first)) {
-      await writeNotices(deps.path, { ...notices, firstDashboardAt: new Date(now).toISOString() });
-      return false;
-    }
-    if (now - first < ASK_AFTER_MS) return false;
-    await writeNotices(deps.path, { ...notices, starAsked: true });
-    return true;
-  } catch {
-    return false;
-  }
+  /** What to write now, if anything: the first day, or the asking. */
+  const next = (notices: Notices): Notices | null => {
+    if (notices.starAsked === true) return null;
+    if (Number.isNaN(firstUse(notices))) return withFirstUse(notices, now);
+    return now - firstUse(notices) < ASK_AFTER_MS ? null : { ...notices, starAsked: true };
+  };
+  // Read without the lock first: most runs have nothing to write, and take none.
+  const seen = await readNotices(deps.path);
+  if (!seen || !next(seen)) return false;
+  let asking = false;
+  const written = await changeNotices(deps.path, (notices) => {
+    const changed = next(notices);
+    asking = changed?.starAsked === true;
+    return changed;
+  });
+  return asking && written;
 }
 
-/** Notes that the user has been to the star already, so the dashboard does not ask. Never throws. */
+/**
+ * Notes that the user has been to the star already, so neither the dashboard nor the shell asks.
+ * Only the question's record: a star given without it is still given, so it never throws.
+ */
 export async function recordStarAsked(deps: NoticesDeps = defaultNoticesDeps()): Promise<void> {
-  try {
-    const notices = (await readNotices(deps.path)) ?? {};
-    if (notices.starAsked === true) return;
-    await writeNotices(deps.path, { ...notices, starAsked: true });
-  } catch {
-    // Only the question's record: a star given without it is still given.
-  }
+  await changeNotices(deps.path, (notices) => (notices.starAsked === true ? null : { ...notices, starAsked: true }), {
+    unreadable: {},
+  });
 }
 
 // ─── The star ────────────────────────────────────────────────────────

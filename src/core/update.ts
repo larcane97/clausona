@@ -14,6 +14,7 @@ import { readdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
+import { changeNotices, defaultNoticesDeps, type Notices, type NoticesDeps, timeIn } from "./notices.js";
 import { appDir } from "./paths.js";
 
 export const RELEASES_URL = "https://github.com/larcane97/clausona/releases";
@@ -431,6 +432,62 @@ export async function performUpdate(options: {
   }
 }
 
+// ─── The daily check ─────────────────────────────────────────────────
+
+const CHECK_EVERY_MS = 24 * 60 * 60 * 1000;
+const SKIP_FOR_MS = 7 * 24 * 60 * 60 * 1000;
+/** Nobody waits on the background check, so a slow network is worth waiting out. */
+const BACKGROUND_CHECK_TIMEOUT_MS = 15_000;
+
+/**
+ * Whether a command should start the day's check: none has been noted in the last day. One noted
+ * ahead of the clock, which was set back since, counts as due, so it cannot hold off checks for
+ * as long as the clock was wrong.
+ */
+export function updateCheckDue(notices: Notices, now: number): boolean {
+  const checked = timeIn(notices, "updateCheckedAt");
+  return Number.isNaN(checked) || now < checked || now - checked >= CHECK_EVERY_MS;
+}
+
+/**
+ * The release a command offers, from what the last check learned: a tag later than `current`,
+ * unless the user said no in the last seven days. The no holds for any release out since.
+ */
+export function cachedUpdateTag(notices: Notices, current: string, now: number): string | null {
+  const tag = notices.latestTag;
+  if (typeof tag !== "string" || !isNewer(tag, current)) return null;
+  const skipped = timeIn(notices, "updateSkippedAt");
+  if (!Number.isNaN(skipped) && now >= skipped && now - skipped < SKIP_FOR_MS) return null;
+  return tag;
+}
+
+/** Notes the latest release's tag, and when it was learned. Never throws. */
+export function recordLatestTag(deps: NoticesDeps, tag: string): Promise<boolean> {
+  return changeNotices(deps.path, (notices) => ({
+    ...notices,
+    latestTag: tag,
+    updateCheckedAt: new Date(deps.now()).toISOString(),
+  }));
+}
+
+/** Notes a no to the update, which holds for seven days. Never throws. */
+export function skipUpdate(deps: NoticesDeps): Promise<boolean> {
+  return changeNotices(deps.path, (notices) => ({ ...notices, updateSkippedAt: new Date(deps.now()).toISOString() }));
+}
+
+/**
+ * `clausona _update-check`, which a command starts in the background once a day: the latest tag,
+ * noted for the next command to offer. A check that learns nothing notes nothing, and the next is
+ * a day later: the command that started it noted the time already.
+ */
+export async function refreshLatestTag(
+  deps: NoticesDeps = defaultNoticesDeps(),
+  check: () => Promise<string | null> = () => checkLatestTag({ timeoutMs: BACKGROUND_CHECK_TIMEOUT_MS }),
+): Promise<void> {
+  const tag = await check();
+  if (tag) await recordLatestTag(deps, tag);
+}
+
 /**
  * What the dashboard needs to offer an update. index.tsx hands it the real one; tests hand it a
  * fake. Each takes a signal the dashboard aborts when it closes, so neither outlives csn.
@@ -438,15 +495,32 @@ export async function performUpdate(options: {
 export type Updater = {
   find: (signal?: AbortSignal) => Promise<UpdateOffer | null>;
   install: (offer: UpdateOffer, signal?: AbortSignal) => Promise<void>;
+  /** A no to the update, which holds the question commands ask after their output for seven days. */
+  skip?: () => void;
 };
 
-export function createUpdater(): Updater {
+/** `remember` is handed each tag the dashboard learns, so the commands after it offer it without checking again. */
+export function createUpdater(
+  options: { check?: (signal?: AbortSignal) => Promise<string | null>; remember?: (tag: string) => void } = {},
+): Updater {
   const target = currentInstallTarget();
+  const { check = (signal) => checkLatestTag({ signal }), remember } = options;
   return {
-    find: (signal) => findUpdate({ current: __CLAUSONA_VERSION__, target, signal }),
+    find: (signal) =>
+      findUpdate({
+        current: __CLAUSONA_VERSION__,
+        target,
+        signal,
+        check: async (checkSignal) => {
+          const tag = await check(checkSignal);
+          if (tag) remember?.(tag);
+          return tag;
+        },
+      }),
     install: (offer, signal) =>
       offer.target
         ? performUpdate({ tag: offer.tag, target: offer.target, signal })
         : Promise.reject(new Error("This clausona was not installed by the installer, so it cannot replace itself.")),
+    skip: () => void skipUpdate(defaultNoticesDeps()),
   };
 }
