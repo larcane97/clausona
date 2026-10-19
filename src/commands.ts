@@ -17,6 +17,7 @@ import {
   syncWithStamp,
   writeLaunchCache,
 } from "./core/launch-cache.js";
+import { defaultNoticesDeps } from "./core/notices.js";
 import { isPosixEnvName, LAUNCH_MARKER, renderJsonEnv, renderLaunchJson, renderPosixExports } from "./core/shell.js";
 import { giveStar, recordStarAsked, type StarOutcome } from "./core/star.js";
 import { trackUsage } from "./core/track-usage.js";
@@ -25,7 +26,9 @@ import {
   currentInstallTarget,
   isNewer,
   performUpdate,
+  refreshLatestTag,
   reinstallCommand,
+  skipUpdate,
   versionOfTag,
 } from "./core/update.js";
 import {
@@ -200,6 +203,7 @@ const commandFlags: Record<string, { flags: string[]; prefixes?: string[]; badUs
   version: { flags: [] },
   "_shell-env": { flags: ["--json"] },
   _launch: { flags: ["--json"] },
+  "_update-check": { flags: [] },
 };
 
 function validateFlags(command: string, args: string[]) {
@@ -1773,6 +1777,13 @@ export async function runCommand(command: string, args: string[]) {
       return "";
     }
 
+    case "_update-check": {
+      // Internal: the day's release check, which a command starts in the background
+      // (after-command.ts) for the commands after it to offer.
+      await refreshLatestTag();
+      return "";
+    }
+
     case "update":
       return runUpdateCommand(args, defaultUpdateDeps());
 
@@ -1862,6 +1873,8 @@ export type UpdateCommandDeps = {
   checkLatest: () => Promise<string | null>;
   confirm: (question: string) => Promise<boolean>;
   install: (tag: string, target: string) => Promise<void>;
+  /** Notes a no, which holds the question commands ask after their output for seven days. */
+  skip: () => Promise<unknown>;
 };
 
 /**
@@ -1908,6 +1921,7 @@ function defaultUpdateDeps(): UpdateCommandDeps {
     checkLatest: () => checkLatestTag({ timeoutMs: UPDATE_COMMAND_CHECK_TIMEOUT_MS }),
     confirm: askYesNo,
     install: (tag, target) => performUpdate({ tag, target }),
+    skip: () => skipUpdate(defaultNoticesDeps()),
   };
 }
 
@@ -1938,6 +1952,7 @@ export async function runUpdateCommand(args: string[], deps: UpdateCommandDeps):
       throw new Error(`v${latest} is available. Run 'clausona update --yes' to update non-interactively.`);
     }
     if (!(await deps.confirm(`  Update v${deps.current} → v${latest}? ${accent("(Y/n)")} `))) {
+      await deps.skip();
       return dim("  Cancelled.");
     }
   }

@@ -3,10 +3,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { NoticesDeps } from "./notices.js";
 import {
   claimStarPrompt,
   giveStar,
-  type NoticesDeps,
   type RunCommand,
   type RunOptions,
   recordStarAsked,
@@ -39,24 +39,45 @@ async function stored(): Promise<Record<string, unknown>> {
 }
 
 describe("claimStarPrompt", () => {
-  it("only notes the first day the dashboard opens, and does not ask then", async () => {
+  it("only notes the first day of use, and does not ask then", async () => {
     expect(await claimStarPrompt(notices(START))).toBe(false);
-    expect(await stored()).toEqual({ firstDashboardAt: new Date(START).toISOString() });
+    expect(await stored()).toEqual({ firstUsedAt: new Date(START).toISOString() });
   });
 
   it("does not ask before three days have passed", async () => {
     await claimStarPrompt(notices(START));
 
     expect(await claimStarPrompt(notices(START + 3 * DAY - 1))).toBe(false);
-    expect(await stored()).toEqual({ firstDashboardAt: new Date(START).toISOString() });
+    expect(await stored()).toEqual({ firstUsedAt: new Date(START).toISOString() });
   });
 
   it("asks once three days have passed, and never again", async () => {
     await claimStarPrompt(notices(START));
 
     expect(await claimStarPrompt(notices(START + 3 * DAY))).toBe(true);
-    expect(await stored()).toEqual({ firstDashboardAt: new Date(START).toISOString(), starAsked: true });
+    expect(await stored()).toEqual({ firstUsedAt: new Date(START).toISOString(), starAsked: true });
     expect(await claimStarPrompt(notices(START + 30 * DAY))).toBe(false);
+  });
+
+  // Before the shell asked too, only the dashboard noted its first day, under its own name.
+  it("counts from the day an older clausona noted the dashboard first opened", async () => {
+    await writeFile(file, JSON.stringify({ firstDashboardAt: new Date(START).toISOString() }));
+
+    expect(await claimStarPrompt(notices(START + 3 * DAY - 1))).toBe(false);
+    expect(await stored()).toEqual({ firstDashboardAt: new Date(START).toISOString() });
+    expect(await claimStarPrompt(notices(START + 3 * DAY))).toBe(true);
+  });
+
+  it("counts from the earlier of the two days", async () => {
+    await writeFile(
+      file,
+      JSON.stringify({
+        firstUsedAt: new Date(START).toISOString(),
+        firstDashboardAt: new Date(START + 2 * DAY).toISOString(),
+      }),
+    );
+
+    expect(await claimStarPrompt(notices(START + 3 * DAY))).toBe(true);
   });
 
   it("keeps what else the file holds", async () => {
@@ -79,7 +100,7 @@ describe("claimStarPrompt", () => {
     await writeFile(file, JSON.stringify({ firstDashboardAt: "yesterday" }));
 
     expect(await claimStarPrompt(notices(START))).toBe(false);
-    expect(await stored()).toEqual({ firstDashboardAt: new Date(START).toISOString() });
+    expect(await stored()).toEqual({ firstDashboardAt: "yesterday", firstUsedAt: new Date(START).toISOString() });
   });
 
   it("does not ask when the asking cannot be written down", async () => {
@@ -117,7 +138,7 @@ describe("recordStarAsked", () => {
     await claimStarPrompt(notices(START));
     await recordStarAsked(notices(START + DAY));
 
-    expect(await stored()).toEqual({ firstDashboardAt: new Date(START).toISOString(), starAsked: true });
+    expect(await stored()).toEqual({ firstUsedAt: new Date(START).toISOString(), starAsked: true });
   });
 
   it("replaces a file it cannot read", async () => {

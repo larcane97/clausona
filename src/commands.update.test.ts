@@ -11,6 +11,7 @@ function setup(overrides: Partial<UpdateCommandDeps> = {}) {
   const install = vi.fn(async (_tag: string, _target: string) => {});
   const confirm = vi.fn(async (_question: string) => true);
   const checkLatest = vi.fn(async (): Promise<string | null> => "v0.3.1-beta");
+  const skip = vi.fn(async () => {});
   const deps: UpdateCommandDeps = {
     current: "0.3.0-beta",
     target: TARGET,
@@ -19,9 +20,10 @@ function setup(overrides: Partial<UpdateCommandDeps> = {}) {
     checkLatest,
     confirm,
     install,
+    skip,
     ...overrides,
   };
-  return { deps, install, confirm, checkLatest };
+  return { deps, install, confirm, checkLatest, skip };
 }
 
 async function failure(promise: Promise<unknown>): Promise<string> {
@@ -58,6 +60,17 @@ describe("clausona update", () => {
 
     expect(stripAnsi(await runUpdateCommand([], deps))).toContain("Cancelled.");
     expect(install).not.toHaveBeenCalled();
+  });
+
+  // Or the next command would ask the question just answered.
+  it("holds the question commands ask for seven days on a no, and only on a no", async () => {
+    const declined = setup({ confirm: async () => false });
+    await runUpdateCommand([], declined.deps);
+    expect(declined.skip).toHaveBeenCalledTimes(1);
+
+    const accepted = setup();
+    await runUpdateCommand([], accepted.deps);
+    expect(accepted.skip).not.toHaveBeenCalled();
   });
 
   it.each(["--yes", "-y"])("skips the question with %s", async (flag) => {
