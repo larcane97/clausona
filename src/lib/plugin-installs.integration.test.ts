@@ -1,10 +1,13 @@
 import {
+  chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -14,8 +17,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { pluginSyncStampPath, syncWithStamp } from "../core/launch-cache.js";
 import { SPAWNING_TEST_TIMEOUT_MS } from "../test-timeouts.js";
 import type { DoctorIssue, Registry } from "../types.js";
+import { offersRepair } from "./format.js";
 
 /**
  * Each Claude profile keeps its own plugins/installed_plugins.json, with the paths in it under
@@ -24,12 +29,14 @@ import type { DoctorIssue, Registry } from "../types.js";
  * time that profile is synced.
  *
  * ~/.clausona is resolved from homedir() at module load, so the module graph has to see a
- * temporary home.
+ * temporary home. Hoisted, since some of the modules imported below ask for it as they load.
  */
-let currentHome = "";
+const fakeHome = vi.hoisted(() => ({ current: "" }));
 vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
-  return { ...actual, default: { ...actual, homedir: () => currentHome }, homedir: () => currentHome };
+  // Never the real home, even before a test has made one.
+  const homedir = () => fakeHome.current || `${actual.tmpdir()}/clausona-installs-no-home`;
+  return { ...actual, default: { ...actual, homedir }, homedir };
 });
 
 /**
@@ -63,7 +70,8 @@ const at = (minute: number) => new Date(Date.UTC(2026, 9, 1, 12, minute)).toISOS
 
 /** `ownCache` names the profiles whose plugin cache is a directory of their own, not a link. */
 async function setup(names: string[] = ["work", "play"], { ownCache = [] as string[] } = {}) {
-  currentHome = realpathSync(mkdtempSync(path.join(tmpdir(), "clausona-installs-")));
+  const currentHome = realpathSync(mkdtempSync(path.join(tmpdir(), "clausona-installs-")));
+  fakeHome.current = currentHome;
   temps.push(currentHome);
   const primary = path.join(currentHome, ".claude");
   const dirs: Record<string, string> = { primary };
@@ -131,6 +139,9 @@ async function setup(names: string[] = ["work", "play"], { ownCache = [] as stri
     read(dir: string): Installs {
       return JSON.parse(readFileSync(listPath(dir), "utf8")).plugins;
     },
+    listPath,
+    /** clausona's record of `dir`'s list, beside it. */
+    recordPath: (dir: string) => path.join(dir, "plugins", ".clausona-installed-plugins.json"),
     sync: (dir: string) => service.syncPluginsJson(dir, primary),
   };
 }
@@ -343,42 +354,258 @@ describe("installed_plugins.json across Claude profiles", () => {
 
     expect(Object.keys(h.read(primary))).toEqual(["p@mkt"]);
   });
+
+  /**
+   * A version folder can be gone for a while - a cache on a drive that is not there, a version
+   * Claude Code cleared before another profile reinstalled it. Claude Code cannot load a record
+   * whose folder is gone, so no profile is given it meanwhile; but it is no uninstall, and once
+   * the folder is back, so is the plugin, in every profile.
+   */
+  it("keeps a plugin whose folder is gone for now, and gives it back once the folder is there", async () => {
+    const h = await setup();
+    const { primary, work, play } = h.dirs;
+    h.cache("p", "1.0.0");
+    h.cache("q", "1.0.0");
+    for (const dir of h.all) {
+      h.write(dir, { "p@mkt": [h.record(dir, "p", "1.0.0", 0)], "q@mkt": [h.record(dir, "q", "1.0.0", 0)] });
+    }
+    for (const dir of h.all) await h.sync(dir);
+    const folder = path.join(primary, "plugins", "cache", "mkt", "q", "1.0.0");
+
+    renameSync(folder, `${folder}.away`);
+    for (const dir of [work, play, primary]) expect(await h.sync(dir), dir).toMatchObject({ ok: true });
+    for (const dir of h.all) expect(Object.keys(h.read(dir)), dir).toEqual(["p@mkt"]);
+
+    renameSync(`${folder}.away`, folder);
+    for (const dir of [work, play]) await h.sync(dir);
+    for (const dir of h.all) expect(Object.keys(h.read(dir)), dir).toEqual(["p@mkt", "q@mkt"]);
+    expect(h.read(play)["q@mkt"]).toEqual([h.record(play, "q", "1.0.0", 0)]);
+  });
+
+  /**
+   * A profile that had a plugin cache of its own, linked to the primary's at last - what repair
+   * does - joins with no record and a list as old as its own last launch. What it changed after
+   * the last sync is its own; the rest is an old copy of the shared list, and a plugin that was
+   * uninstalled meanwhile stays uninstalled.
+   */
+  it("takes from a profile joining late only what it changed after the last sync", async () => {
+    const h = await setup(["work", "late"], { ownCache: ["late"] });
+    const { primary, work, late } = h.dirs;
+    for (const plugin of ["p", "q", "r"]) h.cache(plugin, "1.0.0");
+    for (const dir of h.all) {
+      h.write(dir, { "p@mkt": [h.record(dir, "p", "1.0.0", 0)], "q@mkt": [h.record(dir, "q", "1.0.0", 0)] });
+    }
+    for (const dir of [primary, work]) await h.sync(dir);
+    // `claude plugin uninstall q@mkt` in work, carried to the primary.
+    h.write(work, { "p@mkt": [h.record(work, "p", "1.0.0", 0)] }, 30);
+    await h.sync(primary);
+    expect(Object.keys(h.read(primary))).toEqual(["p@mkt"]);
+
+    // late installs r after that, and then its cache is linked to the primary's.
+    const afterTheSync = new Date(Date.now() + 60_000).toISOString();
+    h.write(late, {
+      "p@mkt": [h.record(late, "p", "1.0.0", 0)],
+      "q@mkt": [h.record(late, "q", "1.0.0", 0)],
+      "r@mkt": [h.record(late, "r", "1.0.0", 0, { lastUpdated: afterTheSync })],
+    });
+    rmSync(path.join(late, "plugins", "cache"), { recursive: true });
+    symlinkSync(path.join(primary, "plugins", "cache"), path.join(late, "plugins", "cache"), "junction");
+    expect(await h.sync(late)).toMatchObject({ ok: true });
+
+    for (const dir of [late, primary]) expect(Object.keys(h.read(dir)), dir).toEqual(["p@mkt", "r@mkt"]);
+  });
+
+  describe("gives up, unstamped and writing nothing, on", () => {
+    /** Syncs `dir` as a launch does, stamping it only if the sync worked. */
+    const launch = (h: Awaited<ReturnType<typeof setup>>, dir: string) => syncWithStamp(dir, () => h.sync(dir));
+
+    async function synced() {
+      const h = await setup();
+      h.cache("p", "1.0.0");
+      h.cache("q", "1.0.0");
+      for (const dir of h.all) h.write(dir, { "p@mkt": [h.record(dir, "p", "1.0.0", 0)] });
+      for (const dir of h.all) await h.sync(dir);
+      return h;
+    }
+
+    it("the primary's list when it is there but cannot be read", async () => {
+      const h = await synced();
+      const { primary, work } = h.dirs;
+      const list = h.listPath(primary);
+      rmSync(list);
+      mkdirSync(list);
+
+      expect(await launch(h, work)).toMatchObject({ ok: false });
+      expect(existsSync(pluginSyncStampPath(work))).toBe(false);
+      expect(lstatSync(list).isDirectory()).toBe(true);
+    });
+
+    // As one did with q installed in the primary since the last sync: the list it wrote back
+    // over the unreadable one had no q.
+    it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+      "the primary's list when it may not be read",
+      async () => {
+        const h = await synced();
+        const { primary, work } = h.dirs;
+        const installed = {
+          "p@mkt": [h.record(primary, "p", "1.0.0", 0)],
+          "q@mkt": [h.record(primary, "q", "1.0.0", 10)],
+        };
+        h.write(primary, installed);
+        chmodSync(h.listPath(primary), 0o000);
+        try {
+          expect(await launch(h, work)).toMatchObject({ ok: false });
+          expect(existsSync(pluginSyncStampPath(work))).toBe(false);
+        } finally {
+          chmodSync(h.listPath(primary), 0o644);
+        }
+        expect(h.read(primary)).toEqual(installed);
+        expect(await launch(h, work)).toMatchObject({ ok: true });
+        expect(Object.keys(h.read(work))).toEqual(["p@mkt", "q@mkt"]);
+      },
+    );
+
+    // Taken for none, it would make the profile a new one, whose list counts by its times.
+    it("a record that is there but cannot be read", async () => {
+      const h = await synced();
+      const { work, play } = h.dirs;
+      const record = h.recordPath(work);
+      rmSync(record);
+      mkdirSync(record);
+
+      expect(await launch(h, play)).toMatchObject({ ok: false });
+      expect(existsSync(pluginSyncStampPath(play))).toBe(false);
+    });
+
+    // Another Claude Code version's list: written over, it would lose what that version keeps.
+    it("the launched profile's own list in a form it does not read, and the primary's", async () => {
+      const h = await synced();
+      const { primary, work } = h.dirs;
+      const newer = `${JSON.stringify({ version: 3, plugins: { "p@mkt": { scopes: ["user"] } } })}\n`;
+      for (const dir of [work, primary]) {
+        const before = readFileSync(h.listPath(dir), "utf8");
+        writeFileSync(h.listPath(dir), newer);
+
+        expect(await launch(h, work), dir).toMatchObject({ ok: false });
+        expect(readFileSync(h.listPath(dir), "utf8")).toBe(newer);
+        expect(existsSync(pluginSyncStampPath(work))).toBe(false);
+        writeFileSync(h.listPath(dir), before);
+      }
+    });
+
+    // The sync holds the lock for milliseconds, so one held longer was most likely left by a
+    // process that was killed: a launch waits a moment for it, not seconds on end.
+    it("the lists while another sync holds the lock", async () => {
+      const h = await synced();
+      const { work } = h.dirs;
+      const lock = path.join(h.home, ".clausona", "locks", "plugin-installs.lock");
+      mkdirSync(path.dirname(lock), { recursive: true });
+      writeFileSync(lock, "another sync");
+
+      const started = Date.now();
+      const result = await launch(h, work);
+      expect(result).toMatchObject({ ok: false });
+      expect(result.error).toContain("plugin-installs.lock");
+      expect(Date.now() - started).toBeLessThan(4_000);
+      expect(existsSync(pluginSyncStampPath(work))).toBe(false);
+
+      rmSync(lock);
+      expect(await launch(h, work)).toMatchObject({ ok: true });
+      expect(existsSync(pluginSyncStampPath(work))).toBe(true);
+    });
+  });
 });
 
 describe("doctor and a profile's plugin list", () => {
-  const differs = (issues: DoctorIssue[]) => issues.filter((issue) => issue.kind === "installed_plugins_differ");
+  const PLUGIN_KINDS = ["installed_plugins_differ", "plugins_cache_not_shared", "plugin_sync_blocked"];
+  const pluginIssues = (issues: DoctorIssue[]) => issues.filter((issue) => PLUGIN_KINDS.includes(issue.kind));
+  const issuesOf = async (h: Awaited<ReturnType<typeof setup>>, id: string) =>
+    (await h.service.doctorProfiles()).find((result) => result.name === id)?.issues ?? [];
 
-  it("warns about a profile whose list differs from the primary's, and repair brings it in line", {
-    timeout: SPAWNING_TEST_TIMEOUT_MS,
-  }, async () => {
-    const h = await setup();
-    const { work } = h.dirs;
+  async function synced(options?: Parameters<typeof setup>[1]) {
+    const h = await setup(["work", "play"], options);
     h.cache("p", "1.0.0");
     h.cache("p", "1.1.0");
     for (const dir of h.all) h.write(dir, { "p@mkt": [h.record(dir, "p", "1.0.0", 0)] });
     for (const dir of h.all) await h.sync(dir);
-    const issuesOf = async (id: string) =>
-      (await h.service.doctorProfiles()).find((result) => result.name === id)?.issues ?? [];
+    return h;
+  }
 
-    expect(differs(await issuesOf("claude:work"))).toEqual([]);
-
+  /**
+   * After every `claude plugin update` each profile but one is behind until it is next launched,
+   * which brings it in step. Warning about that, and offering repair, would be noise each time.
+   */
+  it("says nothing of a list that is only behind", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
+    const h = await synced();
+    const { work } = h.dirs;
+    // Synced since by a launch, then `claude plugin update p@mkt` there.
+    await syncWithStamp(work, () => h.sync(work));
     h.write(work, { "p@mkt": [h.record(work, "p", "1.1.0", 10)] });
 
-    const [issue] = differs(await issuesOf("claude:work"));
-    expect(issue?.severity).toBe("warning");
-    expect(issue?.message).toContain("p@mkt 1.1.0 here, 1.0.0 in the primary");
-    expect(differs(await issuesOf("claude:play"))).toEqual([]);
+    expect(pluginIssues(await issuesOf(h, "claude:work"))).toEqual([]);
+    expect(pluginIssues(await issuesOf(h, "claude:play"))).toEqual([]);
+  });
+
+  it("warns about a list that still differs after its sync, and repair brings it in line", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
+    const h = await synced();
+    const { primary, work } = h.dirs;
+    h.write(work, { "p@mkt": [h.record(work, "p", "1.1.0", 10)] });
+    // Stamped by a sync that ran after both lists and the record last changed.
+    const earlier = new Date(Date.now() - 60_000);
+    for (const file of [h.listPath(work), h.listPath(primary), h.recordPath(work)]) utimesSync(file, earlier, earlier);
+    writeFileSync(pluginSyncStampPath(work), "");
+
+    const issues = pluginIssues(await issuesOf(h, "claude:work"));
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({ kind: "installed_plugins_differ", severity: "warning" });
+    expect(issues[0]?.message).toContain("p@mkt 1.1.0 here, 1.0.0 in the primary");
+    expect(offersRepair(issues)).toBe(true);
 
     await h.service.repairProfile("claude:work");
 
-    expect(differs(await issuesOf("claude:work"))).toEqual([]);
-    // The primary has 1.1.0 now, and play has not been synced since.
-    expect(differs(await issuesOf("claude:play"))).toHaveLength(1);
+    expect(pluginIssues(await issuesOf(h, "claude:work"))).toEqual([]);
+    // The sync repair ends with takes work's own update, newer than the shared record.
+    expect(h.read(work)).toEqual({ "p@mkt": [h.record(work, "p", "1.1.0", 10)] });
+    expect(h.read(primary)).toEqual({ "p@mkt": [h.record(primary, "p", "1.1.0", 10)] });
     // repair links the primary's plugins/ entries into the profile, but not clausona's own
     // record of the primary's list: each profile keeps its own.
     for (const name of readdirSync(path.join(work, "plugins")).filter((n) => n.startsWith(".clausona"))) {
       expect(lstatSync(path.join(work, "plugins", name)).isSymbolicLink(), name).toBe(false);
     }
-    expect(readdirSync(path.join(work, "plugins")).some((n) => n.startsWith(".clausona-installed"))).toBe(true);
+  });
+
+  it("warns about a profile that does not reach the primary's plugin cache", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
+    const h = await synced({ ownCache: ["work"] });
+    const { primary } = h.dirs;
+    h.write(primary, { "p@mkt": [h.record(primary, "p", "1.1.0", 10)] });
+
+    const issues = pluginIssues(await issuesOf(h, "claude:work"));
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({ kind: "plugins_cache_not_shared", severity: "warning" });
+    expect(issues[0]?.message).toContain("a plugin only that cache held has to be installed again");
+    expect(offersRepair(issues)).toBe(true);
+  });
+
+  // repair would run into the same file, so doctor names it and offers no repair, and a repair
+  // run anyway says the plugin list was not synced rather than report success.
+  it("names a file the sync cannot read, and repair says it could not sync", {
+    timeout: SPAWNING_TEST_TIMEOUT_MS,
+  }, async () => {
+    const h = await synced();
+    const { work } = h.dirs;
+    rmSync(h.recordPath(work));
+    mkdirSync(h.recordPath(work));
+
+    const issues = pluginIssues(await issuesOf(h, "claude:work"));
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({ kind: "plugin_sync_blocked", severity: "warning" });
+    expect(issues[0]?.message).toContain(".clausona-installed-plugins.json cannot be read");
+    expect(offersRepair(issues)).toBe(false);
+
+    await expect(h.service.repairProfile("claude:work")).rejects.toThrow(/plugin list could not be synced/);
   });
 });

@@ -1,7 +1,13 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { describeDifferences, mergeInstalls, parseInstalls, relocateInstallPath } from "./plugin-installs.js";
+import {
+  describeDifferences,
+  loadableInstalls,
+  mergeInstalls,
+  parseInstalls,
+  relocateInstallPath,
+} from "./plugin-installs.js";
 
 describe("relocateInstallPath", () => {
   it("moves a path into another config dir's plugins/, whichever separator it was written with", () => {
@@ -43,18 +49,60 @@ describe("parseInstalls", () => {
 describe("mergeInstalls", () => {
   const on = (minute: number) => new Date(Date.UTC(2026, 9, 1, 12, minute)).toISOString();
   const record = (version: string, minute: number) => ({ scope: "user", version, lastUpdated: on(minute) });
-  const always = () => true;
+  const loads = () => true;
 
   it("keeps the shared record where no profile changed anything", () => {
     const shared = { "p@m": [record("1.0.0", 0)] };
     const stale = { current: { "p@m": [record("0.9.0", 0)] }, base: { "p@m": [record("0.9.0", 0)] }, changedAt: 0 };
-    expect(mergeInstalls(shared, [stale], always)).toEqual(shared);
+    expect(mergeInstalls(shared, [stale], { loads })).toEqual(shared);
   });
 
-  it("passes over a record that is not on disk for one that is", () => {
+  it("prefers a record that loads to a newer one whose folder is gone", () => {
     const shared = { "p@m": [record("1.0.0", 0)] };
     const newer = { current: { "p@m": [record("2.0.0", 9)] }, base: shared, changedAt: 0 };
-    expect(mergeInstalls(shared, [newer], (r) => r.version !== "2.0.0")).toEqual(shared);
+    expect(mergeInstalls(shared, [newer], { loads: (r) => r.version !== "2.0.0" })).toEqual(shared);
+  });
+
+  it("keeps a record whose folder is gone when no record of the plugin loads", () => {
+    const shared = { "p@m": [record("1.0.0", 0)] };
+    expect(mergeInstalls(shared, [], { loads: () => false })).toEqual(shared);
+  });
+
+  /**
+   * A profile with no record joining lists that already have one - its cache only just linked,
+   * say - holds mostly an old copy of the shared list. What it changed after the last sync is
+   * its own; the rest is not, and must not bring back what was uninstalled meanwhile.
+   */
+  it("takes from a profile without a record only what it changed after the last sync", () => {
+    const shared = { "p@m": [record("1.0.0", 0)] };
+    const late = {
+      current: { "p@m": [record("1.0.0", 0)], "gone@m": [record("1.0.0", 5)], "new@m": [record("1.0.0", 30)] },
+      base: null,
+      changedAt: 0,
+    };
+    const lastSync = Date.parse(on(20));
+
+    expect(mergeInstalls(shared, [late], { loads, joinedAfter: lastSync })).toEqual({
+      "p@m": [record("1.0.0", 0)],
+      "new@m": [record("1.0.0", 30)],
+    });
+    // The very first sync has nothing to go by, and takes it all.
+    expect(Object.keys(mergeInstalls(null, [late], { loads }))).toEqual(["p@m", "gone@m", "new@m"]);
+  });
+});
+
+describe("loadableInstalls", () => {
+  it("leaves out each record whose folder is gone, and a plugin left with none", () => {
+    const installs = {
+      "a@m": [
+        { scope: "user", installPath: "/here" },
+        { scope: "local", installPath: "/gone" },
+      ],
+      "b@m": [{ scope: "user", installPath: "/gone" }],
+    };
+    expect(loadableInstalls(installs, (r) => r.installPath !== "/gone")).toEqual({
+      "a@m": [{ scope: "user", installPath: "/here" }],
+    });
   });
 });
 

@@ -226,23 +226,37 @@ Claude Code lists the plugins it has installed in `plugins/installed_plugins.jso
 absolute path of each one's cached version, so every Claude profile keeps a copy of its own with
 the paths under its own config directory. The cache itself is shared. `claude plugin install`,
 `update` and `uninstall`, and `/plugin` inside a session, rewrite only the copy of the profile
-they run in. The plugin sync that runs before each launch carries the change to the others.
+they run in. The plugin sync that runs before each launch carries the change to the others, and
+the primary's copy is the one every other is kept in step with.
 
-The primary's copy is the shared list. Each sync reads every profile's copy and compares it with
-what clausona last wrote there or read from it, which it keeps beside the copy in
-`plugins/.clausona-installed-plugins.json`. A plugin a copy has gained or changed since was
-installed or updated in that profile, and one it has lost was uninstalled there. Those changes
-go into the shared list, which is then written to the primary and to the profile that is
-starting. Every other profile gets it when it starts next. A copy that still lists a plugin
-because its profile has not started since the plugin was uninstalled elsewhere is not an
-install, and does not bring the plugin back. When two profiles changed the same plugin, the
-later change wins. An install for one project, at project or local scope, is carried with that
-project's path and apart from an install for the user.
+Each sync reads every profile's copy and compares it with what clausona last wrote there or read
+from it, which it keeps beside the copy in `plugins/.clausona-installed-plugins.json`. A plugin a
+copy has gained or changed since was installed or updated in that profile, and one it has lost
+was uninstalled there. Those changes go into the shared list, which the primary's record keeps,
+and the shared list is then written to the primary's copy and to the profile that is starting.
+Every other profile gets it when it starts next. A copy that still lists a plugin because its
+profile has not started since the plugin was uninstalled elsewhere is not an install, and does
+not bring the plugin back. An install for one project, at project or local scope, is carried
+with that project's path and apart from an install for the user.
+
+When two profiles changed the same plugin, the later change wins, as near as clausona can tell.
+An install or update is timed by the `lastUpdated` Claude Code gives it, but an uninstall only by
+when that profile's copy was last written. A profile that uninstalled one plugin and then
+installed another before its changes were synced has its uninstall timed by the install, and
+that uninstall can lose to an update made earlier in another profile.
+
+A plugin whose cached version is not on disk, because that folder was removed, is left out of
+every copy, since Claude Code cannot load it. It stays in the shared list, though, and is back in
+every copy once its folder is.
 
 The first sync after upgrading from a version that kept the copies apart has nothing to compare
-with yet. It takes every plugin any profile lists, the newest version of each, and leaves out
-versions that are no longer in the cache. A plugin you had uninstalled in one profile but not
-the others comes back that once; uninstall it again and it stays uninstalled.
+with yet. It takes every plugin any profile lists, and of a plugin listed with different versions
+the record updated most recently, by its `lastUpdated`, which is not always the highest version.
+A plugin you had uninstalled in one profile but not the others comes back that once; uninstall it
+again and it stays uninstalled. A profile that joins later with no record of its own, one just
+added or one whose cache has just been linked, counts only what it changed after the last sync
+as its own; the rest of its copy is taken to be an old copy of the shared list, so it brings back
+nothing uninstalled meanwhile.
 
 A profile whose `plugins/cache` is a directory of its own rather than a link to the primary's,
 which happens when the primary had no plugin cache yet when the profile was set up, caches
@@ -250,9 +264,22 @@ versions the others cannot reach. Its copy is left to itself, as all copies were
 `clausona repair <profile>` links its cache to the primary's and sets its own aside in the
 profile's backup; a plugin only that cache held has to be installed again.
 
-`clausona doctor` reports a profile whose copy differs from the primary's as
-`installed_plugins_differ`, a warning that names the plugins and versions. The profile's next
-launch, or `clausona repair <profile>`, brings the two in line.
+The sync takes a lock in `~/.clausona/locks` for the few milliseconds it reads and writes, so two
+profiles started at once do not each fold in half of what changed. A launch waits for it a second
+and a half at most. A sync that cannot finish, because of the lock, a copy or record it cannot
+read, or a copy in a form this version does not read, writes nothing and leaves no stamp, so the
+next launch tries again. Claude Code can still read a copy just before clausona writes it and
+write its own after. clausona reads each copy again right before it writes, and gives up if it
+changed, which narrows that window to the moment between the two but cannot close it.
+
+`clausona doctor` says nothing about a copy that is only behind, which the profile's next launch
+brings in step: after every `claude plugin update` that is every profile but one. It warns only
+about what a launch will not put right. `plugins_cache_not_shared` is a profile whose cache is
+not linked to the primary's; `clausona repair <profile>` links it. `plugin_sync_blocked` names a
+copy or record the sync cannot read, which only fixing that file settles. `installed_plugins_differ`
+is a copy that still differs from the primary's after the profile's sync has run since either
+changed. It names each plugin with its version or state on each side, such as `p@m 1.1.0 here,
+1.0.0 in the primary` or `p@m only here`, and `clausona repair <profile>` runs the sync again.
 
 ### What a Claude profile shares
 

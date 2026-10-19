@@ -7,10 +7,11 @@ import path from "node:path";
  *
  * Each Claude profile keeps a list of its own, because the paths in it are absolute, and
  * `claude plugin install`, `update` and `uninstall` rewrite only the list of the profile they
- * run in. The plugin sync keeps the lists in step: the primary's is the shared list, each sync
+ * run in. The plugin sync keeps the lists in step: it keeps a shared list beside the primary's,
  * folds into it what any profile changed since clausona last wrote or read that profile's list,
- * and the profile being synced gets the result. This module is the part of that which only
- * computes; the files are read and written in service.ts.
+ * and writes the result to the primary and to the profile being synced, less any record whose
+ * folder is not on disk. This module is the part of that which only computes; the files are
+ * read and written in service.ts.
  */
 
 export type PluginRecord = Record<string, unknown>;
@@ -129,12 +130,24 @@ export type ProfileInstalls = {
   current: PluginInstalls | null;
   /**
    * The list as clausona last wrote it to the profile or read it there, in the same form. Null
-   * before the profile's first sync: then everything it lists counts as an install of its own,
-   * and nothing it lacks as an uninstall.
+   * when the profile has never been synced, or its record is gone: then nothing it lacks counts
+   * as an uninstall, and what it lists counts as an install only as `joinedAfter` says.
    */
   base: PluginInstalls | null;
   /** When the profile's list was last written, in ms: the time of every uninstall in it. */
   changedAt: number;
+};
+
+export type MergeOptions = {
+  /** Whether a record's folder is on disk. One that is not still counts, but loses to one that is. */
+  loads: (record: PluginRecord) => boolean;
+  /**
+   * For a profile with no base, when the last sync anywhere was, in ms: only a record it changed
+   * after that is an install or update of its own, and the rest of its list is taken to be an
+   * old copy of the shared one. Undefined for the very first sync, which has no shared list to
+   * go by, and takes every record each profile lists.
+   */
+  joinedAfter?: number;
 };
 
 /** A record a place should end with, or null to drop the place, and when that was decided. */
@@ -142,7 +155,7 @@ type Candidate = { record: PluginRecord | null; time: number };
 
 /**
  * The shared list after every profile's changes since its base are folded into `shared`, the
- * list as clausona last wrote it to the primary (null before the first sync).
+ * shared list as the last sync left it (null for the first).
  *
  * A place a profile lists differently from its base was installed or updated there; a place
  * its base has and its list does not was uninstalled there. A place no profile changed keeps
@@ -152,8 +165,10 @@ type Candidate = { record: PluginRecord | null; time: number };
  * `lastUpdated`, an uninstall's the time its list was written. On a tie a change beats the
  * shared record, and the earlier profile beats the later.
  *
- * A record that `usable` refuses - its installPath is no longer on disk - is passed over: it
- * neither stays nor outranks one that loads. A place left with none is dropped.
+ * A record whose folder is not on disk stays, so a version that is only gone for now is back
+ * once its folder is; it is written to no profile meanwhile (see loadableInstalls). It loses to
+ * any record of the same place that loads and to any uninstall, whatever their times: a
+ * profile's leftover from a cache of its own must not hide the version everyone can load.
  *
  * The shared list's order is kept; places that are new follow, in the order the profiles are
  * given.
@@ -161,7 +176,7 @@ type Candidate = { record: PluginRecord | null; time: number };
 export function mergeInstalls(
   shared: PluginInstalls | null,
   profiles: readonly ProfileInstalls[],
-  usable: (record: PluginRecord) => boolean,
+  { loads, joinedAfter }: MergeOptions,
 ): PluginInstalls {
   const start = places(shared ?? {});
   const order = new Map<string, string>([...start].map(([place, { id }]) => [place, id]));
@@ -180,7 +195,9 @@ export function mergeInstalls(
     for (const [place, { id, record }] of now) {
       const was = before?.get(place);
       if (was && sameRecord(was.record, record)) continue;
-      propose(place, id, { record, time: recordTime(record) });
+      const time = recordTime(record);
+      if (before === null && joinedAfter !== undefined && time <= joinedAfter) continue;
+      propose(place, id, { record, time });
     }
     if (before === null) continue;
     for (const [place, { id }] of before) {
@@ -188,20 +205,35 @@ export function mergeInstalls(
     }
   }
 
+  const latest = (candidates: Candidate[]) => {
+    let winner: Candidate | undefined;
+    for (const candidate of candidates) if (!winner || candidate.time > winner.time) winner = candidate;
+    return winner;
+  };
   const merged: PluginInstalls = {};
   for (const [place, id] of order) {
     const kept = start.get(place);
     const candidates = [
       ...(changes.get(place) ?? []),
       ...(kept ? [{ record: kept.record, time: recordTime(kept.record) }] : []),
-    ].filter((candidate) => candidate.record === null || usable(candidate.record));
-    let winner: Candidate | undefined;
-    for (const candidate of candidates) if (!winner || candidate.time > winner.time) winner = candidate;
+    ];
+    const firm = candidates.filter((candidate) => candidate.record === null || loads(candidate.record));
+    const winner = latest(firm.length > 0 ? firm : candidates);
     if (!winner?.record) continue;
     if (!merged[id]) merged[id] = [];
     merged[id].push(winner.record);
   }
   return merged;
+}
+
+/** `installs` without the records whose folder is not on disk: what a profile is given to load. */
+export function loadableInstalls(installs: PluginInstalls, loads: (record: PluginRecord) => boolean): PluginInstalls {
+  const loadable: PluginInstalls = {};
+  for (const [id, records] of Object.entries(installs)) {
+    const kept = records.filter(loads);
+    if (kept.length > 0) loadable[id] = kept;
+  }
+  return loadable;
 }
 
 /** Whether a list has no records at all. */
