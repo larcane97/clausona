@@ -1271,16 +1271,15 @@ async function installSharers(
   primarySource: string,
   registry: Registry | null,
 ): Promise<InstallSharers | null> {
-  const pluginsDir = (dir: string) =>
-    realpath(path.join(dir, "plugins")).catch(() => path.resolve(path.join(dir, "plugins")));
+  const pluginsDir = pluginsDirKey;
   const primaryPlugins = await pluginsDir(primarySource);
   if ((await pluginsDir(configDir)) === primaryPlugins) {
-    return { dirs: await sharingProfiles(primarySource, primaryPlugins, registry, pluginsDir), own: null };
+    return { dirs: await sharingProfiles(primarySource, registry), own: null };
   }
   if (!(await sharesPluginCache(configDir, primarySource))) return null;
   // The profile being synced under the name it was given, wherever the registry has it.
   const ownPlugins = await pluginsDir(configDir);
-  const others = await sharingProfiles(primarySource, primaryPlugins, registry, pluginsDir);
+  const others = await sharingProfiles(primarySource, registry);
   const keys = await Promise.all(others.map(pluginsDir));
   const dirs = keys.includes(ownPlugins)
     ? others.map((dir, index) => (keys[index] === ownPlugins ? configDir : dir))
@@ -1288,17 +1287,18 @@ async function installSharers(
   return { dirs, own: configDir };
 }
 
+/** A config dir's plugins/ as it resolves, to tell two names for one directory apart from two directories. */
+function pluginsDirKey(dir: string): Promise<string> {
+  return realpath(path.join(dir, "plugins")).catch(() => path.resolve(path.join(dir, "plugins")));
+}
+
 /** The primary, then each registered Claude profile that shares its plugin cache, each plugins/ once. */
-async function sharingProfiles(
-  primarySource: string,
-  primaryPlugins: string,
-  registry: Registry | null,
-  pluginsDir: (dir: string) => Promise<string>,
-): Promise<string[]> {
+async function sharingProfiles(primarySource: string, registry: Registry | null): Promise<string[]> {
+  const pluginsDir = pluginsDirKey;
   const dirs = [primarySource];
   const registeredPrimary = registry?.primarySources.claude ?? path.join(homedir(), ".claude");
   if (!registry || path.resolve(registeredPrimary) !== path.resolve(primarySource)) return dirs;
-  const seen = new Set([primaryPlugins]);
+  const seen = new Set([await pluginsDir(primarySource)]);
   for (const profile of Object.values(registry.profiles)) {
     if (profile?.tool !== "claude" || typeof profile.configDir !== "string") continue;
     const key = await pluginsDir(profile.configDir);
@@ -1359,6 +1359,46 @@ async function syncOwnInstalls(configDir: string, primarySource: string, wrote: 
   if (await writeJsonIfChanged(installsPath(configDir), { version: 2, plugins: synced })) wrote();
 }
 
+/** A file the plugin sync gives up on at every launch, whose profile it is, and whose sync it stops. */
+type SyncBlocker = { owner: string; filePath: string; problem: string; fix: string; everyone: boolean };
+
+/**
+ * Each file that makes the plugin sync give up at every launch, among the profiles that share
+ * the primary's plugins (see syncSharedInstalls). Every sync reads every one of their lists and
+ * records, so one that is there but cannot be read holds up all of them, and so does the
+ * primary's list in a form this version does not read. Another profile's list in such a form
+ * holds up only that profile's own sync: the others pass over it.
+ */
+async function pluginSyncBlockers(primarySource: string, registry: Registry): Promise<SyncBlocker[]> {
+  const blockers: SyncBlocker[] = [];
+  const unreadable = (owner: string, filePath: string, error: unknown): SyncBlocker => ({
+    owner,
+    filePath,
+    problem: `cannot be read (${(error as NodeJS.ErrnoException).code ?? String(error)})`,
+    fix: "Make it readable, or move it aside.",
+    everyone: true,
+  });
+  for (const owner of await sharingProfiles(primarySource, registry)) {
+    const list = installsPath(owner);
+    const record = installsRecordPath(owner);
+    try {
+      if ((await readInstallsFile(list)).foreign) {
+        blockers.push({
+          owner,
+          filePath: list,
+          problem: "is not a list this version of clausona reads",
+          fix: "A newer Claude Code may have written it: update clausona with 'clausona update'.",
+          everyone: owner === primarySource,
+        });
+      }
+    } catch (error) {
+      blockers.push(unreadable(owner, list, error));
+    }
+    await readInstallsRecord(record).catch((error: unknown) => blockers.push(unreadable(owner, record, error)));
+  }
+  return blockers;
+}
+
 /**
  * What doctor says about a non-primary Claude profile's plugin list: only what its next launch
  * will not put right on its own. A list that differs from the primary's because a plugin was
@@ -1368,12 +1408,17 @@ async function syncOwnInstalls(configDir: string, primarySource: string, wrote: 
  *
  * - `plugins_cache_not_shared`: the profile does not reach the primary's plugin cache, so its
  *   list is not kept in step at all. repair links the cache.
- * - `plugin_sync_blocked`: a list or record the sync gives up on every time, which only fixing
- *   that file settles.
+ * - `plugin_sync_blocked`: a list or record the sync gives up on every time (see
+ *   pluginSyncBlockers), which only fixing that file settles. Said on the profile whose file it
+ *   is, and on every other profile it holds up.
  * - `installed_plugins_differ`: the lists differ although this profile's sync has run since
  *   either of them, or its record, last changed. repair runs the sync again.
  */
-async function pluginInstallsIssues(configDir: string, primarySource: string): Promise<DoctorIssue[]> {
+async function pluginInstallsIssues(
+  configDir: string,
+  primarySource: string,
+  blockers: () => Promise<SyncBlocker[]>,
+): Promise<DoctorIssue[]> {
   const home = homedir();
   // With no cache in the primary there is nothing to link, and nothing installed to share.
   if ((await realpath(path.join(primarySource, "plugins", "cache")).catch(() => null)) === null) return [];
@@ -1385,29 +1430,28 @@ async function pluginInstallsIssues(configDir: string, primarySource: string): P
     return [{ kind: "plugins_cache_not_shared", severity: "warning", message }];
   }
 
-  // The files the sync of this profile reads, and gives up on when one cannot be read.
-  const blocked = (filePath: string, problem: string, fix: string): DoctorIssue[] => [
-    {
-      kind: "plugin_sync_blocked",
-      severity: "warning",
-      message: `${filePath.replace(home, "~")} ${problem}, so the plugin sync gives up at every launch and this profile's plugins do not follow the others'. ${fix}`,
-    },
-  ];
-  const newer = "is not a list this version of clausona reads";
-  const updateClausona = "A newer Claude Code may have written it: update clausona with 'clausona update'.";
+  const all = await blockers();
+  const mine = all.find((blocker) => blocker.owner === configDir);
+  const everyone = all.find((blocker) => blocker.everyone);
+  if (mine) {
+    const reach = mine.everyone
+      ? "the plugin sync of every profile gives up at every launch, not only this one's, and no profile's plugins follow the others'"
+      : "this profile's plugin sync gives up at every launch, and its plugins do not follow the others'";
+    const message = `${mine.filePath.replace(home, "~")} ${mine.problem}, so ${reach}. ${mine.fix}`;
+    return [{ kind: "plugin_sync_blocked", severity: "warning", message }];
+  }
+  if (everyone) {
+    const message = `The plugin sync of every profile is held up by ${everyone.filePath.replace(home, "~")}, which ${everyone.problem}, so this profile's plugins do not follow the others' either. ${everyone.fix}`;
+    return [{ kind: "plugin_sync_blocked", severity: "warning", message }];
+  }
+
   let own: Awaited<ReturnType<typeof readInstallsFile>>;
   let primary: Awaited<ReturnType<typeof readInstallsFile>>;
   try {
     [own, primary] = await Promise.all([installsPath(configDir), installsPath(primarySource)].map(readInstallsFile));
-    await readInstallsRecord(installsRecordPath(configDir));
-    await readInstallsRecord(installsRecordPath(primarySource));
-  } catch (error) {
-    const { path: filePath, code } = error as NodeJS.ErrnoException;
-    const problem = `cannot be read (${code ?? String(error)})`;
-    return blocked(filePath ?? "A plugin list", problem, "Make it readable, or move it aside.");
+  } catch {
+    return []; // Unreadable only since the blockers were looked for: the next doctor says so.
   }
-  if (own.foreign) return blocked(installsPath(configDir), newer, updateClausona);
-  if (primary.foreign) return blocked(installsPath(primarySource), newer, updateClausona);
 
   // Synced since the lists last changed - the stamp is taken before a sync reads anything - and
   // by this version, which leaves a record: then the next launch has nothing more to do.
@@ -1502,10 +1546,15 @@ async function syncSharedInstalls(primarySource: string, sharers: InstallSharers
   // which takes every profile's list as it is; once there are records, a profile without one -
   // never synced, or linked to the primary's cache only now - is mostly an old copy of the
   // shared list, and only what it changed since the last sync counts.
+  //
+  // A primary with neither its record nor a list this can read has lost the shared list, and
+  // that is no empty one: every other profile's list matches its own record then, and would add
+  // nothing, so each of them would be emptied in turn. It is rebuilt as the first sync builds
+  // it, from every profile's list, the most recently updated record of each place.
   const recorded = lists.flatMap((list) => (list.record ? [list.record] : []));
-  const firstSync = recorded.length === 0;
-  const start = firstSync ? null : (primary.record?.shared ?? primary.record?.plugins ?? primary.current);
-  const joinedAfter = firstSync ? undefined : Math.max(...recorded.map((record) => record.changedAt));
+  const rebuild = recorded.length === 0 || (primary.record === null && primary.current === null);
+  const start = rebuild ? null : (primary.record?.shared ?? primary.record?.plugins ?? primary.current);
+  const joinedAfter = rebuild ? undefined : Math.max(...recorded.map((record) => record.changedAt));
 
   // Whether each installPath is still there, asked once per path. Every list here is under the
   // primary's config dir, and every profile here reaches the primary's cache, so once is enough.
@@ -1527,7 +1576,8 @@ async function syncSharedInstalls(primarySource: string, sharers: InstallSharers
     start,
     lists.map((list) => ({
       current: list.current,
-      base: list.record?.plugins ?? null,
+      // Rebuilding, each list counts whole, as on a first sync, records or not.
+      base: rebuild ? null : (list.record?.plugins ?? null),
       changedAt: list.file.changedAt,
     })),
     { loads, joinedAfter },
@@ -2533,6 +2583,12 @@ export async function doctorProfiles(
     refused ??= fileSymlinksRefused();
     return refused;
   };
+  // Looked for at most once a run too: every profile that shares plugins reads the same files.
+  let blockers: Promise<SyncBlocker[]> | undefined;
+  const syncBlockers = (primarySource: string) => () => {
+    blockers ??= pluginSyncBlockers(primarySource, registry);
+    return blockers;
+  };
 
   for (const [id, profile] of Object.entries(registry.profiles)) {
     const issues: DoctorIssue[] = [];
@@ -2823,7 +2879,9 @@ export async function doctorProfiles(
           });
         }
 
-        if (primarySource) issues.push(...(await pluginInstallsIssues(profile.configDir, primarySource)));
+        if (primarySource) {
+          issues.push(...(await pluginInstallsIssues(profile.configDir, primarySource, syncBlockers(primarySource))));
+        }
       }
     }
 

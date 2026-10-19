@@ -356,6 +356,44 @@ describe("installed_plugins.json across Claude profiles", () => {
   });
 
   /**
+   * The shared list lives in the primary's record, beside the primary's list. With both gone, or
+   * the list broken and the record gone, every other profile's list still matches its record and
+   * adds nothing; read as empty, the shared list would empty each profile at its next launch,
+   * and their records with them. It is rebuilt from every list instead, as on a first sync.
+   */
+  it.each([
+    ["removed", () => ""],
+    ["no longer JSON", () => "{ not json"],
+  ])("rebuilds the shared list when the primary's list is %s and its record is gone", async (_case, content) => {
+    const h = await setup();
+    const { primary, work, play } = h.dirs;
+    h.cache("p", "1.0.0");
+    h.cache("p", "1.1.0");
+    h.cache("q", "1.0.0");
+    for (const dir of h.all) {
+      h.write(dir, { "p@mkt": [h.record(dir, "p", "1.0.0", 0)], "q@mkt": [h.record(dir, "q", "1.0.0", 0)] });
+    }
+    for (const dir of h.all) await h.sync(dir);
+    // play updated p since; the rebuild keeps the most recently updated record.
+    h.write(play, { "p@mkt": [h.record(play, "p", "1.1.0", 10)], "q@mkt": [h.record(play, "q", "1.0.0", 0)] });
+    rmSync(h.recordPath(primary));
+    const broken = content();
+    if (broken === "") rmSync(h.listPath(primary));
+    else writeFileSync(h.listPath(primary), broken);
+
+    expect(await h.sync(work)).toMatchObject({ ok: true });
+
+    const expected = (dir: string) => ({
+      "p@mkt": [h.record(dir, "p", "1.1.0", 10)],
+      "q@mkt": [h.record(dir, "q", "1.0.0", 0)],
+    });
+    expect(h.read(work)).toEqual(expected(work));
+    expect(h.read(primary)).toEqual(expected(primary));
+    await h.sync(play);
+    expect(h.read(play)).toEqual(expected(play));
+  });
+
+  /**
    * A version folder can be gone for a while - a cache on a drive that is not there, a version
    * Claude Code cleared before another profile reinstalled it. Claude Code cannot load a record
    * whose folder is gone, so no profile is given it meanwhile; but it is no uninstall, and once
@@ -591,8 +629,9 @@ describe("doctor and a profile's plugin list", () => {
   });
 
   // repair would run into the same file, so doctor names it and offers no repair, and a repair
-  // run anyway says the plugin list was not synced rather than report success.
-  it("names a file the sync cannot read, and repair says it could not sync", {
+  // run anyway says the plugin list was not synced rather than report success. Every sync reads
+  // every profile's files, so the one file holds up the others too, and doctor says so there.
+  it("names a file the sync cannot read on every profile it holds up, and repair says it could not sync", {
     timeout: SPAWNING_TEST_TIMEOUT_MS,
   }, async () => {
     const h = await synced();
@@ -600,12 +639,31 @@ describe("doctor and a profile's plugin list", () => {
     rmSync(h.recordPath(work));
     mkdirSync(h.recordPath(work));
 
-    const issues = pluginIssues(await issuesOf(h, "claude:work"));
-    expect(issues).toHaveLength(1);
-    expect(issues[0]).toMatchObject({ kind: "plugin_sync_blocked", severity: "warning" });
-    expect(issues[0]?.message).toContain(".clausona-installed-plugins.json cannot be read");
-    expect(offersRepair(issues)).toBe(false);
+    const own = pluginIssues(await issuesOf(h, "claude:work"));
+    expect(own).toHaveLength(1);
+    expect(own[0]).toMatchObject({ kind: "plugin_sync_blocked", severity: "warning" });
+    expect(own[0]?.message).toContain(".clausona-installed-plugins.json cannot be read");
+    expect(own[0]?.message).toContain("the plugin sync of every profile gives up at every launch, not only this one's");
+    expect(offersRepair(own)).toBe(false);
+
+    const other = pluginIssues(await issuesOf(h, "claude:play"));
+    expect(other).toHaveLength(1);
+    expect(other[0]).toMatchObject({ kind: "plugin_sync_blocked", severity: "warning" });
+    expect(other[0]?.message).toContain("The plugin sync of every profile is held up by ");
+    expect(other[0]?.message).toContain(path.join(".claude-work", "plugins", ".clausona-installed-plugins.json"));
+    expect(offersRepair(other)).toBe(false);
 
     await expect(h.service.repairProfile("claude:work")).rejects.toThrow(/plugin list could not be synced/);
+  });
+
+  // Another profile's list in a newer form holds up only its own sync: the others pass over it.
+  it("names a list in a newer form only on its own profile", { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
+    const h = await synced();
+    const { work } = h.dirs;
+    writeFileSync(h.listPath(work), JSON.stringify({ version: 3, plugins: {} }));
+
+    const own = pluginIssues(await issuesOf(h, "claude:work"));
+    expect(own[0]?.message).toContain("this profile's plugin sync gives up at every launch");
+    expect(pluginIssues(await issuesOf(h, "claude:play"))).toEqual([]);
   });
 });

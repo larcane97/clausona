@@ -253,7 +253,9 @@ The first sync after upgrading from a version that kept the copies apart has not
 with yet. It takes every plugin any profile lists, and of a plugin listed with different versions
 the record updated most recently, by its `lastUpdated`, which is not always the highest version.
 A plugin you had uninstalled in one profile but not the others comes back that once; uninstall it
-again and it stays uninstalled. A profile that joins later with no record of its own, one just
+again and it stays uninstalled. The shared list is rebuilt the same way if it is ever lost, with
+the primary's record gone and its copy gone or broken, rather than read as an empty one, which
+would empty every profile in turn. A profile that joins later with no record of its own, one just
 added or one whose cache has just been linked, counts only what it changed after the last sync
 as its own; the rest of its copy is taken to be an old copy of the shared list, so it brings back
 nothing uninstalled meanwhile.
@@ -276,7 +278,10 @@ changed, which narrows that window to the moment between the two but cannot clos
 brings in step: after every `claude plugin update` that is every profile but one. It warns only
 about what a launch will not put right. `plugins_cache_not_shared` is a profile whose cache is
 not linked to the primary's; `clausona repair <profile>` links it. `plugin_sync_blocked` names a
-copy or record the sync cannot read, which only fixing that file settles. `installed_plugins_differ`
+copy or record the sync cannot read, which only fixing that file settles. Every sync reads every
+profile's files, so such a file holds up the sync of every profile, and doctor says so on each
+of them. Only a copy in a newer form, other than the primary's, holds up its own profile alone.
+`installed_plugins_differ`
 is a copy that still differs from the primary's after the profile's sync has run since either
 changed. It names each plugin with its version or state on each side, such as `p@m 1.1.0 here,
 1.0.0 in the primary` or `p@m only here`, and `clausona repair <profile>` runs the sync again.
