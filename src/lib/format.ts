@@ -647,6 +647,8 @@ const SELF_DIRECTED_ISSUE_KINDS = new Set<DoctorIssue["kind"]>([
   "shared_sqlite_home",
   // The primary's own backups, which repair never touches; the message says how to delete them.
   "foreign_account_backup",
+  // A plugin list or record the sync cannot read: repair would run into it again.
+  "plugin_sync_blocked",
 ]);
 
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;

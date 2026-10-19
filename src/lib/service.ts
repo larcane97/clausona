@@ -29,6 +29,17 @@ import { acquireFileLock } from "../core/file-lock.js";
 import { isKnownSecretSource, keySharersElsewhere } from "../core/key-source.js";
 import { invalidateLaunchCache, launchCachePath, launchRefPath, PLUGIN_SYNC_STAMP_NAME } from "../core/launch-cache.js";
 import { appDir, backupDirFor, claudeJsonPathForConfigDir } from "../core/paths.js";
+import {
+  describeDifferences,
+  isEmptyInstalls,
+  loadableInstalls,
+  mergeInstalls,
+  type PluginInstalls,
+  type PluginRecord,
+  parseInstalls,
+  relocateInstallPath,
+  relocateInstalls,
+} from "../core/plugin-installs.js";
 import { spawnCommand } from "../core/process.js";
 import { cachedQuotas, collectQuotas, type QuotaTarget } from "../core/quota-store.js";
 import { isV1Registry, migrateRegistryV1toV2, setActiveProfile } from "../core/registry.js";
@@ -81,6 +92,19 @@ import { deleteSecret, resolveSecret, storeSecret } from "./secrets.js";
 const PLUGINS_PATH_FILES = new Set(["known_marketplaces.json", "installed_plugins.json"]);
 
 /**
+ * clausona's copy of a profile's plugins/installed_plugins.json, beside it: the list as the
+ * last sync wrote it there or read it, its paths under the primary's config dir. What the list
+ * holds that this does not was installed or updated there since, and what this holds that the
+ * list does not was uninstalled. The primary's also holds the shared list, `shared`: what every
+ * profile is given, records whose folder is not on disk included. Each describes its own
+ * profile's list, so setupPluginsDir never links the primary's into a profile - nor a write of
+ * one in progress, `<name>.tmp.<pid>`.
+ */
+const INSTALLS_RECORD_NAME = ".clausona-installed-plugins.json";
+const INSTALLS_RECORD_NOTE =
+  "Written by clausona each time it syncs installed_plugins.json beside it: that list as clausona last wrote or read it, to tell what Claude Code changed in it since.";
+
+/**
  * True when a known_marketplaces.json entry describes a marketplace clausona manages —
  * a directory under the profile's plugins/marketplaces.
  *
@@ -108,6 +132,15 @@ const REGISTRY_LOCK_PATH = path.join(CLAUSONA_DIR, "locks", "registry.lock");
 // lets a writer queued behind such a process take over rather than fail.
 const REGISTRY_LOCK_STALE_MS = 5_000;
 const REGISTRY_LOCK_WAIT_MS = 10_000;
+
+// Held while a plugin sync reads every Claude profile's plugin list and writes the shared one,
+// so two profiles launched at once do not each fold in half of what changed. That is a few
+// small files per profile, milliseconds, so a lock this old was left by a process that died.
+// A launch waits a second and a half at most, since a lock a killed sync left behind is in the
+// way of every launch until it goes stale: a sync that gives up is not stamped, and runs again
+// at the next launch.
+const PLUGIN_INSTALLS_LOCK_PATH = path.join(CLAUSONA_DIR, "locks", "plugin-installs.lock");
+const PLUGIN_INSTALLS_LOCK = { staleMs: 15_000, waitMs: 1_500 };
 
 // An add holds its name's lock throughout, sign-in included, and a sign-in can take minutes.
 // So the lock is kept alive by refreshing it rather than by a long stale time: a holder that
@@ -1046,10 +1079,10 @@ export async function setupSharedLinks(
 }
 
 /**
- * How a plugin sync went: `ok` is false when any step of it failed, and `changed` says whether
- * it rewrote a file - even one that failed half way may have.
+ * How a plugin sync went: `ok` is false when any step of it failed, and `error` then says why;
+ * `changed` says whether it rewrote a file - even one that failed half way may have.
  */
-export type PluginSyncResult = { ok: boolean; changed: boolean };
+export type PluginSyncResult = { ok: boolean; changed: boolean; error?: string };
 
 /**
  * Writes `value` as writeJson does, unless the file already holds the same JSON, and resolves
@@ -1075,8 +1108,10 @@ async function writeJsonIfChanged(targetPath: string, value: unknown): Promise<b
 
 /**
  * Rewrites a profile's known_marketplaces.json and installed_plugins.json so every path in
- * them points into its own config dir, and drops what is no longer on disk. Never rejects:
- * it runs on the way to starting Claude, and a failure must not stop that.
+ * them points into its own config dir, and drops what is no longer on disk. The plugin list is
+ * also kept in step with every other Claude profile's (see syncSharedInstalls): an install,
+ * update or uninstall made in any of them reaches this one. Never rejects: it runs on the way
+ * to starting Claude, and a failure must not stop that.
  */
 export async function syncPluginsJson(configDir: string, primarySource: string): Promise<PluginSyncResult> {
   let changed = false;
@@ -1159,45 +1194,432 @@ export async function syncPluginsJson(configDir: string, primarySource: string):
 
     if (await writeJsonIfChanged(knownPath, syncedKnown)) changed = true;
 
-    // Sync installed_plugins.json (v2 format: { version, plugins: { name: [entries] } })
-    const installedPath = path.join(configDir, "plugins", "installed_plugins.json");
-    type PluginEntry = Record<string, unknown> & { installPath?: string };
-    type InstalledPlugins = { version?: number; plugins?: Record<string, PluginEntry[]> };
-    let installedJson = await readJson<InstalledPlugins | null>(installedPath, null);
-    if (installedJson === null) {
-      installedJson = await readJson<InstalledPlugins>(path.join(primarySource, "plugins", "installed_plugins.json"), {
-        version: 2,
-        plugins: {},
-      });
-    }
-
-    const syncedPlugins: Record<string, PluginEntry[]> = {};
-    for (const [pluginName, entries] of Object.entries(installedJson.plugins ?? {})) {
-      const syncedEntries: PluginEntry[] = [];
-      for (const entry of entries) {
-        if (entry.installPath) {
-          const resolved = await realpath(entry.installPath).catch(() => null);
-          if (!resolved) continue; // target doesn't exist — remove entry
-          const pluginsIdx = entry.installPath.indexOf("/plugins/");
-          const newInstallPath =
-            pluginsIdx !== -1 ? path.join(configDir, entry.installPath.slice(pluginsIdx + 1)) : entry.installPath;
-          syncedEntries.push({ ...entry, installPath: newInstallPath });
-        } else {
-          syncedEntries.push(entry);
-        }
-      }
-      if (syncedEntries.length > 0) {
-        syncedPlugins[pluginName] = syncedEntries;
-      }
-    }
-
-    if (await writeJsonIfChanged(installedPath, { version: installedJson.version ?? 2, plugins: syncedPlugins })) {
+    const wrote = () => {
       changed = true;
+    };
+    const sharers = await installSharers(configDir, primarySource, registry);
+    if (sharers === null) {
+      await syncOwnInstalls(configDir, primarySource, wrote);
+      return { ok: true, changed };
+    }
+    const release = await acquireFileLock(PLUGIN_INSTALLS_LOCK_PATH, PLUGIN_INSTALLS_LOCK);
+    if (!release) {
+      return { ok: false, changed, error: `another clausona process held ${PLUGIN_INSTALLS_LOCK_PATH}` };
+    }
+    try {
+      await syncSharedInstalls(primarySource, sharers, wrote);
+    } finally {
+      await release();
     }
     return { ok: true, changed };
-  } catch {
+  } catch (error) {
     // Never block Claude from launching - but say it failed, so the sync is not stamped done.
-    return { ok: false, changed };
+    return { ok: false, changed, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * A file's text, or null when there is no file. Only that: a list or record that is there but
+ * cannot be read - its permissions, a directory in its place - is no list, but it is not an
+ * empty one either, and the sync gives up on it rather than write over what it may hold.
+ */
+async function readTextIfThere(filePath: string): Promise<string | null> {
+  try {
+    return await readFile(filePath, "utf8");
+  } catch (error) {
+    const { code } = error as NodeJS.ErrnoException;
+    if (code === "ENOENT") return null;
+    // Named here: a failed read, as of a directory, carries no path of its own.
+    throw Object.assign(new Error(`${filePath} cannot be read (${code ?? String(error)})`), { code, path: filePath });
+  }
+}
+
+const installsPath = (configDir: string) => path.join(configDir, "plugins", "installed_plugins.json");
+const installsRecordPath = (configDir: string) => path.join(configDir, "plugins", INSTALLS_RECORD_NAME);
+
+/** Whether a plugin's installPath leads to a folder that is there, through any link. */
+const installPathExists = (installPath: string) =>
+  realpath(installPath).then(
+    () => true,
+    () => false,
+  );
+
+/** The config dirs whose plugin lists are kept in step, the primary first, and the one being synced. */
+type InstallSharers = { dirs: string[]; own: string | null };
+
+/** Whether `configDir` loads plugins from the primary's cache, through the link setupPluginsDir makes. */
+async function sharesPluginCache(configDir: string, primarySource: string): Promise<boolean> {
+  const primaryCache = await realpath(path.join(primarySource, "plugins", "cache")).catch(() => null);
+  if (primaryCache === null) return false;
+  return (await realpath(path.join(configDir, "plugins", "cache")).catch(() => null)) === primaryCache;
+}
+
+/**
+ * The Claude config dirs whose plugin lists are kept in step: the primary's, and every
+ * registered profile's whose plugins/cache is the primary's. A profile whose cache is a
+ * directory of its own - the primary had none when it was set up - loads versions no other
+ * profile can reach, and cannot reach theirs, so its list is left to itself, as all lists were
+ * before they were shared. Each plugins/ once, so a profile whose plugins/ is the primary's,
+ * linked whole by an older clausona, is the primary. `own` is `configDir` when it is one of the
+ * others, null when it is the primary. Null when `configDir` keeps its own list.
+ *
+ * The registry's profiles only when the registry's primary is `primarySource`: they share
+ * plugins with that one and no other.
+ */
+async function installSharers(
+  configDir: string,
+  primarySource: string,
+  registry: Registry | null,
+): Promise<InstallSharers | null> {
+  const pluginsDir = pluginsDirKey;
+  const primaryPlugins = await pluginsDir(primarySource);
+  if ((await pluginsDir(configDir)) === primaryPlugins) {
+    return { dirs: await sharingProfiles(primarySource, registry), own: null };
+  }
+  if (!(await sharesPluginCache(configDir, primarySource))) return null;
+  // The profile being synced under the name it was given, wherever the registry has it.
+  const ownPlugins = await pluginsDir(configDir);
+  const others = await sharingProfiles(primarySource, registry);
+  const keys = await Promise.all(others.map(pluginsDir));
+  const dirs = keys.includes(ownPlugins)
+    ? others.map((dir, index) => (keys[index] === ownPlugins ? configDir : dir))
+    : [...others, configDir];
+  return { dirs, own: configDir };
+}
+
+/** A config dir's plugins/ as it resolves, to tell two names for one directory apart from two directories. */
+function pluginsDirKey(dir: string): Promise<string> {
+  return realpath(path.join(dir, "plugins")).catch(() => path.resolve(path.join(dir, "plugins")));
+}
+
+/** The primary, then each registered Claude profile that shares its plugin cache, each plugins/ once. */
+async function sharingProfiles(primarySource: string, registry: Registry | null): Promise<string[]> {
+  const pluginsDir = pluginsDirKey;
+  const dirs = [primarySource];
+  const registeredPrimary = registry?.primarySources.claude ?? path.join(homedir(), ".claude");
+  if (!registry || path.resolve(registeredPrimary) !== path.resolve(primarySource)) return dirs;
+  const seen = new Set([await pluginsDir(primarySource)]);
+  for (const profile of Object.values(registry.profiles)) {
+    if (profile?.tool !== "claude" || typeof profile.configDir !== "string") continue;
+    const key = await pluginsDir(profile.configDir);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (await sharesPluginCache(profile.configDir, primarySource)) dirs.push(profile.configDir);
+  }
+  return dirs;
+}
+
+/**
+ * An installed_plugins.json: what it lists, and when it was last written. `installs` is null
+ * when there is no list, or one that is not JSON, which lists nothing rather than nothing
+ * installed. `foreign` is a list that is JSON but not one this reads - another Claude Code
+ * version's, perhaps - which the sync gives up on and leaves as it is; a file that is not JSON
+ * at all is broken, and is written over like a missing one. Rejects when the file is there but
+ * cannot be read.
+ */
+async function readInstallsFile(
+  filePath: string,
+): Promise<{ raw: string | null; installs: PluginInstalls | null; foreign: boolean; changedAt: number }> {
+  const raw = await readTextIfThere(filePath);
+  if (raw === null) return { raw, installs: null, foreign: false, changedAt: 0 };
+  const changedAt = (await stat(filePath).catch(() => null))?.mtimeMs ?? Date.now();
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    return { raw, installs: null, foreign: false, changedAt };
+  }
+  const installs = parseInstalls(json);
+  return { raw, installs, foreign: installs === null, changedAt };
+}
+
+/**
+ * The sync of a profile that keeps its own list (see installSharers): the list, or a copy of
+ * the primary's when it has none, with every path moved into the profile's config dir and every
+ * record whose installPath is gone dropped.
+ */
+async function syncOwnInstalls(configDir: string, primarySource: string, wrote: () => void): Promise<void> {
+  const own = await readInstallsFile(installsPath(configDir));
+  if (own.foreign) throw new Error(`${installsPath(configDir)} is not a list this version reads`);
+  const installs =
+    own.installs ?? (await readInstallsFile(installsPath(primarySource))).installs ?? ({} as PluginInstalls);
+  const synced: PluginInstalls = {};
+  for (const [id, records] of Object.entries(installs)) {
+    const kept: PluginRecord[] = [];
+    for (const record of records) {
+      if (typeof record.installPath !== "string") {
+        kept.push(record);
+        continue;
+      }
+      if (!(await installPathExists(record.installPath))) continue;
+      kept.push({ ...record, installPath: relocateInstallPath(record.installPath, configDir) });
+    }
+    if (kept.length > 0) synced[id] = kept;
+  }
+  if (await writeJsonIfChanged(installsPath(configDir), { version: 2, plugins: synced })) wrote();
+}
+
+/** A file the plugin sync gives up on at every launch, whose profile it is, and whose sync it stops. */
+type SyncBlocker = { owner: string; filePath: string; problem: string; fix: string; everyone: boolean };
+
+/**
+ * Each file that makes the plugin sync give up at every launch, among the profiles that share
+ * the primary's plugins (see syncSharedInstalls). Every sync reads every one of their lists and
+ * records, so one that is there but cannot be read holds up all of them, and so does the
+ * primary's list in a form this version does not read. Another profile's list in such a form
+ * holds up only that profile's own sync: the others pass over it.
+ */
+async function pluginSyncBlockers(primarySource: string, registry: Registry): Promise<SyncBlocker[]> {
+  const blockers: SyncBlocker[] = [];
+  const unreadable = (owner: string, filePath: string, error: unknown): SyncBlocker => ({
+    owner,
+    filePath,
+    problem: `cannot be read (${(error as NodeJS.ErrnoException).code ?? String(error)})`,
+    fix: "Make it readable, or move it aside.",
+    everyone: true,
+  });
+  for (const owner of await sharingProfiles(primarySource, registry)) {
+    const list = installsPath(owner);
+    const record = installsRecordPath(owner);
+    try {
+      if ((await readInstallsFile(list)).foreign) {
+        blockers.push({
+          owner,
+          filePath: list,
+          problem: "is not a list this version of clausona reads",
+          fix: "A newer Claude Code may have written it: update clausona with 'clausona update'.",
+          everyone: owner === primarySource,
+        });
+      }
+    } catch (error) {
+      blockers.push(unreadable(owner, list, error));
+    }
+    await readInstallsRecord(record).catch((error: unknown) => blockers.push(unreadable(owner, record, error)));
+  }
+  return blockers;
+}
+
+/**
+ * What doctor says about a non-primary Claude profile's plugin list: only what its next launch
+ * will not put right on its own. A list that differs from the primary's because a plugin was
+ * installed, updated or uninstalled in one of them since this profile was last synced is not
+ * among it - that is every profile but one after each `claude plugin update`, and the next
+ * launch of each brings it in step.
+ *
+ * - `plugins_cache_not_shared`: the profile does not reach the primary's plugin cache, so its
+ *   list is not kept in step at all. repair links the cache.
+ * - `plugin_sync_blocked`: a list or record the sync gives up on every time (see
+ *   pluginSyncBlockers), which only fixing that file settles. Said on the profile whose file it
+ *   is, and on every other profile it holds up.
+ * - `installed_plugins_differ`: the lists differ although this profile's sync has run since
+ *   either of them, or its record, last changed. repair runs the sync again.
+ */
+async function pluginInstallsIssues(
+  configDir: string,
+  primarySource: string,
+  blockers: () => Promise<SyncBlocker[]>,
+): Promise<DoctorIssue[]> {
+  const home = homedir();
+  // With no cache in the primary there is nothing to link, and nothing installed to share.
+  if ((await realpath(path.join(primarySource, "plugins", "cache")).catch(() => null)) === null) return [];
+  if (!(await sharesPluginCache(configDir, primarySource))) {
+    const cache = path.join(configDir, "plugins", "cache");
+    const message = (await exists(cache))
+      ? `plugins/cache is not the primary's plugin cache, so plugins installed here and in the other profiles do not reach each other. Repair links it and sets what is there aside in the profile's backup; a plugin only that cache held has to be installed again.`
+      : `plugins/ has no cache linked to the primary's, so plugins installed in the other profiles do not reach this one. Repair links it.`;
+    return [{ kind: "plugins_cache_not_shared", severity: "warning", message }];
+  }
+
+  const all = await blockers();
+  const mine = all.find((blocker) => blocker.owner === configDir);
+  const everyone = all.find((blocker) => blocker.everyone);
+  if (mine) {
+    const reach = mine.everyone
+      ? "the plugin sync of every profile gives up at every launch, not only this one's, and no profile's plugins follow the others'"
+      : "this profile's plugin sync gives up at every launch, and its plugins do not follow the others'";
+    const message = `${mine.filePath.replace(home, "~")} ${mine.problem}, so ${reach}. ${mine.fix}`;
+    return [{ kind: "plugin_sync_blocked", severity: "warning", message }];
+  }
+  if (everyone) {
+    const message = `The plugin sync of every profile is held up by ${everyone.filePath.replace(home, "~")}, which ${everyone.problem}, so this profile's plugins do not follow the others' either. ${everyone.fix}`;
+    return [{ kind: "plugin_sync_blocked", severity: "warning", message }];
+  }
+
+  let own: Awaited<ReturnType<typeof readInstallsFile>>;
+  let primary: Awaited<ReturnType<typeof readInstallsFile>>;
+  try {
+    [own, primary] = await Promise.all([installsPath(configDir), installsPath(primarySource)].map(readInstallsFile));
+  } catch {
+    return []; // Unreadable only since the blockers were looked for: the next doctor says so.
+  }
+
+  // Synced since the lists last changed - the stamp is taken before a sync reads anything - and
+  // by this version, which leaves a record: then the next launch has nothing more to do.
+  const mtime = async (filePath: string) => (await stat(filePath).catch(() => null))?.mtimeMs;
+  const stamp = await mtime(path.join(configDir, "plugins", PLUGIN_SYNC_STAMP_NAME));
+  const record = await mtime(installsRecordPath(configDir));
+  if (stamp === undefined || record === undefined) return [];
+  for (const changed of [own.changedAt, primary.changedAt, record]) if (changed >= stamp) return [];
+  const differences = describeDifferences(
+    relocateInstalls(own.installs ?? {}, primarySource),
+    relocateInstalls(primary.installs ?? {}, primarySource),
+    home,
+  );
+  if (differences.length === 0) return [];
+  const shown = differences.slice(0, 3).join("; ");
+  const more = differences.length > 3 ? `; and ${differences.length - 3} more` : "";
+  return [
+    {
+      kind: "installed_plugins_differ",
+      severity: "warning",
+      message: `plugins/installed_plugins.json differs from the primary's (${shown}${more}), although its plugin sync has run since either changed.`,
+    },
+  ];
+}
+
+/**
+ * A profile's record (see INSTALLS_RECORD_NAME): `plugins`, the list as clausona last wrote it
+ * there or read it, and on the primary's, `shared`, the shared list, which also holds what
+ * `plugins` was written without because its folder was not on disk. Null when there is none,
+ * or what is there is not a record, as for a profile never synced. Rejects when it is there but
+ * cannot be read: taken for none, it would make every plugin the profile lists an install.
+ */
+async function readInstallsRecord(
+  filePath: string,
+): Promise<{ plugins: PluginInstalls; shared: PluginInstalls | null; changedAt: number } | null> {
+  const raw = await readTextIfThere(filePath);
+  if (raw === null) return null;
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const plugins = parseInstalls(json);
+  if (plugins === null) return null;
+  const sharedJson = (json as { shared?: unknown }).shared;
+  const shared = sharedJson === undefined ? null : parseInstalls({ version: 2, plugins: sharedJson });
+  const changedAt = (await stat(filePath).catch(() => null))?.mtimeMs ?? 0;
+  return { plugins, shared, changedAt };
+}
+
+/**
+ * The sync of a profile whose plugin list is kept in step with the others (see installSharers
+ * and mergeInstalls): what each of them changed since its record is folded into the shared
+ * list, kept in the primary's record, and that goes to the primary's list and to `own`'s, the
+ * profile being synced - less each record whose folder is not on disk. Such a record stays in
+ * the shared list, and is back in every list once its folder is.
+ *
+ * Every other profile's list is left as it is until its own sync - Claude Code may be running
+ * there - but its record moves on to the list just read from it, so what it changed is folded
+ * in once. Left behind, the record would bring an install back after another profile
+ * uninstalled it.
+ *
+ * Gives up, writing nothing, on a list or record that is there but cannot be read, and on the
+ * primary's or `own`'s list in a form this does not read.
+ */
+async function syncSharedInstalls(primarySource: string, sharers: InstallSharers, wrote: () => void): Promise<void> {
+  const lists = await Promise.all(
+    sharers.dirs.map(async (dir) => {
+      const file = await readInstallsFile(installsPath(dir));
+      const record = await readInstallsRecord(installsRecordPath(dir));
+      return {
+        dir,
+        file,
+        record,
+        // Under the primary's config dir, where the shared list keeps its paths.
+        current: file.installs && relocateInstalls(file.installs, primarySource),
+      };
+    }),
+  );
+  const [primary] = lists;
+  const own = sharers.own === null ? primary : lists.find((list) => list.dir === sharers.own);
+  // The two lists this writes, in a form it does not read: written over, they would lose what
+  // they hold, and read around, every plugin in the primary's would read as uninstalled.
+  for (const list of [primary, own]) {
+    if (!list) throw new Error(`no plugin list to sync for ${sharers.own ?? primarySource}`);
+    if (list.file.foreign) throw new Error(`${installsPath(list.dir)} is not a list this version reads`);
+  }
+  if (!primary) return;
+
+  // The shared list as the last sync left it. With no record anywhere this is the first sync,
+  // which takes every profile's list as it is; once there are records, a profile without one -
+  // never synced, or linked to the primary's cache only now - is mostly an old copy of the
+  // shared list, and only what it changed since the last sync counts.
+  //
+  // A primary with neither its record nor a list this can read has lost the shared list, and
+  // that is no empty one: every other profile's list matches its own record then, and would add
+  // nothing, so each of them would be emptied in turn. It is rebuilt as the first sync builds
+  // it, from every profile's list, the most recently updated record of each place.
+  const recorded = lists.flatMap((list) => (list.record ? [list.record] : []));
+  const rebuild = recorded.length === 0 || (primary.record === null && primary.current === null);
+  const start = rebuild ? null : (primary.record?.shared ?? primary.record?.plugins ?? primary.current);
+  const joinedAfter = rebuild ? undefined : Math.max(...recorded.map((record) => record.changedAt));
+
+  // Whether each installPath is still there, asked once per path. Every list here is under the
+  // primary's config dir, and every profile here reaches the primary's cache, so once is enough.
+  const paths = new Set<string>();
+  for (const installs of [start, ...lists.map((list) => list.current)]) {
+    for (const records of Object.values(installs ?? {})) {
+      for (const record of records) if (typeof record.installPath === "string") paths.add(record.installPath);
+    }
+  }
+  const onDisk = new Set<string>();
+  await Promise.all(
+    [...paths].map(async (installPath) => {
+      if (await installPathExists(installPath)) onDisk.add(installPath);
+    }),
+  );
+  const loads = (record: PluginRecord) => typeof record.installPath !== "string" || onDisk.has(record.installPath);
+
+  const shared = mergeInstalls(
+    start,
+    lists.map((list) => ({
+      current: list.current,
+      // Rebuilding, each list counts whole, as on a first sync, records or not.
+      base: rebuild ? null : (list.record?.plugins ?? null),
+      changedAt: list.file.changedAt,
+    })),
+    { loads, joinedAfter },
+  );
+  const loadable = loadableInstalls(shared, loads);
+
+  const writeList = async (dir: string, installs: PluginInstalls) => {
+    if (await writeJsonIfChanged(installsPath(dir), { version: 2, plugins: installs })) wrote();
+  };
+  // Not watched, so writing one is no change to report. None and an empty one read the same,
+  // so a profile with nothing installed is given none.
+  const writeRecord = async (dir: string, installs: PluginInstalls, sharedList?: PluginInstalls) => {
+    const empty = isEmptyInstalls(installs) && (sharedList === undefined || isEmptyInstalls(sharedList));
+    if (empty && !(await exists(installsRecordPath(dir)))) return;
+    await writeJsonIfChanged(installsRecordPath(dir), {
+      note: INSTALLS_RECORD_NOTE,
+      version: 2,
+      plugins: installs,
+      ...(sharedList === undefined ? {} : { shared: sharedList }),
+    });
+  };
+
+  // Claude Code may be running in the primary, or in another session of this profile, and
+  // rewrite its list while this one was merging. Written over, that install or uninstall would
+  // be lost; so the sync gives up instead, unstamped, and the next launch finds the list changed.
+  // This narrows the window to the moment between this read and the write; it cannot close it.
+  for (const list of new Set([primary, own])) {
+    if (list && (await readTextIfThere(installsPath(list.dir))) !== list.file.raw) {
+      throw new Error(`${installsPath(list.dir)} changed while it was synced`);
+    }
+  }
+
+  // A primary with no list and nothing to list is given none, as before lists were shared.
+  if (!isEmptyInstalls(loadable) || primary.file.raw !== null) await writeList(primarySource, loadable);
+  await writeRecord(primarySource, loadable, shared);
+  if (sharers.own !== null) {
+    await writeList(sharers.own, relocateInstalls(loadable, sharers.own));
+    await writeRecord(sharers.own, loadable);
+  }
+  for (const list of lists.slice(1)) {
+    if (list.dir === sharers.own || list.current === null) continue;
+    await writeRecord(list.dir, list.current);
   }
 }
 
@@ -1300,8 +1722,15 @@ async function mergePluginFiles(profilePluginsDir: string, primaryPluginsDir: st
  * under its own name, with a copy of the two JSON files the sync is about to rewrite.
  * Removing the profile moves each item back into its plugins/ wherever the profile has none
  * of it by then; the rest stays in the backup, and is named.
+ *
+ * Resolves to how the plugin sync it ends with went, or undefined when the primary has no
+ * plugins/ and there was nothing to set up.
  */
-async function setupPluginsDir(profileDir: string, primarySource: string, backupDir: string): Promise<void> {
+async function setupPluginsDir(
+  profileDir: string,
+  primarySource: string,
+  backupDir: string,
+): Promise<PluginSyncResult | undefined> {
   // setupSharedLinks refuses this first; checked again because what follows deletes the same way.
   if (await isPrimaryDir(profileDir, primarySource)) {
     throw new Error(
@@ -1328,6 +1757,9 @@ async function setupPluginsDir(profileDir: string, primarySource: string, backup
     // The primary's own plugin sync stamp, or one being written. Linked, every profile's stamp
     // would be the primary's, and a sync of one would mark them all done.
     if (item.name.startsWith(PLUGIN_SYNC_STAMP_NAME)) continue;
+    // Nor clausona's record of the primary's plugin list: linked, a profile's sync would write
+    // its own over it, and the primary's next one would read installs and uninstalls into that.
+    if (item.name.startsWith(INSTALLS_RECORD_NAME)) continue;
 
     const source = path.join(primaryPlugins, item.name);
     const target = path.join(profilePlugins, item.name);
@@ -1349,7 +1781,7 @@ async function setupPluginsDir(profileDir: string, primarySource: string, backup
     await createSharedLink(source, target, { isDirectory: item.isDirectory() });
   }
 
-  await syncPluginsJson(profileDir, primarySource);
+  return syncPluginsJson(profileDir, primarySource);
 }
 
 /**
@@ -2151,6 +2583,12 @@ export async function doctorProfiles(
     refused ??= fileSymlinksRefused();
     return refused;
   };
+  // Looked for at most once a run too: every profile that shares plugins reads the same files.
+  let blockers: Promise<SyncBlocker[]> | undefined;
+  const syncBlockers = (primarySource: string) => () => {
+    blockers ??= pluginSyncBlockers(primarySource, registry);
+    return blockers;
+  };
 
   for (const [id, profile] of Object.entries(registry.profiles)) {
     const issues: DoctorIssue[] = [];
@@ -2440,6 +2878,10 @@ export async function doctorProfiles(
             message: "plugins/ marketplaces and known_marketplaces.json are out of sync",
           });
         }
+
+        if (primarySource) {
+          issues.push(...(await pluginInstallsIssues(profile.configDir, primarySource, syncBlockers(primarySource))));
+        }
       }
     }
 
@@ -2523,11 +2965,14 @@ export async function repairProfile(id: string, options: { force?: boolean } = {
   );
 
   const repaired = await setupSharedLinks(profileAdapter, profile.configDir, primarySource, mergeSessions, backupDir);
+  let pluginSync: PluginSyncResult | undefined;
   if (profile.tool === "claude") {
-    // Never merged into the primary here, unlike add and init: repair runs again and again, and
-    // would write the profile's registrations - stale ones too - into the primary each time.
-    // What setupPluginsDir replaces is backed up instead, the two JSON files with it.
-    await setupPluginsDir(profile.configDir, primarySource, backupDir);
+    // mergePluginFiles is not run here, unlike add and init: repair runs again and again, and
+    // would copy the profile's own marketplaces, cache and registrations - stale ones too - into
+    // the primary each time. What setupPluginsDir replaces is backed up instead, the two JSON
+    // files with it. The profile's plugin list still reaches the shared one, through the sync
+    // setupPluginsDir ends with, which takes only what changed since that list's record.
+    pluginSync = await setupPluginsDir(profile.configDir, primarySource, backupDir);
   }
 
   // Restore skip-set items from backup if they were stale symlinks that got removed
@@ -2539,6 +2984,13 @@ export async function repairProfile(id: string, options: { force?: boolean } = {
     await restoreSkippedFromBackup(profileAdapter, profile.configDir, primarySource, backupDir, mergeSessions);
   }
 
+  // Said once everything else is done: the links are repaired either way, and only the plugin
+  // list is left as it was.
+  if (pluginSync && !pluginSync.ok) {
+    throw new Error(
+      `The shared links of '${id}' are repaired, but its plugin list could not be synced: ${pluginSync.error ?? "unknown error"}. Its next launch tries again, and so does another repair.`,
+    );
+  }
   return { repaired };
 }
 

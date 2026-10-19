@@ -254,22 +254,34 @@ export function pluginSyncStampPath(configDir: string): string {
  * does:
  * - the profile's own known_marketplaces.json and installed_plugins.json;
  * - the primary's marketplaces directory, whose listing it reads;
- * - the primary's installed_plugins.json, which it reads when the profile has none;
+ * - the primary's installed_plugins.json, the list every profile's plugins are kept in step with;
  * - the primary's plugin cache, and `cacheDirs`: its marketplace and plugin directories as
  *   they were when the list was made (see pluginCacheWatchDirs). An installPath is
  *   `cache/<marketplace>/<plugin>/<version>`, and the sync drops an entry whose path is gone,
  *   so a version added or removed has to change the mtime of something watched - which is
- *   the plugin directory holding it, not `cache` itself.
+ *   the plugin directory holding it, not `cache` itself;
+ * - `peers`, every other Claude profile's config dir: their installed_plugins.json. `claude
+ *   plugin install`, `update` and `uninstall` rewrite only the list of the profile they run in,
+ *   and the sync of any profile carries the change on, so a change there makes this profile's
+ *   sync due too. Without them an install in one profile would wait for something else to
+ *   change before it reached this one.
  *
  * Not watched: anything deeper than a version directory, which does not decide whether an
  * installPath exists, and a marketplace or plugin directory created after the list was made
  * - its parent's mtime changes, so the sync is due, and every `_sync-plugins` run drops
- * claude's launch script so the next launch lists it. It also reads other profiles'
+ * claude's launch script so the next launch lists it. Nor a profile added after the list was
+ * made: adding one saves profiles.json, which drops the script. It also reads other profiles'
  * known_marketplaces.json, but only for a marketplace on disk that the profile's JSON lacks -
- * and that marketplace appearing is already a change to the listing. A path that does not
- * exist is never due.
+ * and that marketplace appearing is already a change to the listing - and the record of each
+ * profile's list it keeps beside it, which only a sync writes. A path that does not exist is
+ * never due.
  */
-export function pluginSyncWatchList(configDir: string, primary: string, cacheDirs: readonly string[] = []): string[] {
+export function pluginSyncWatchList(
+  configDir: string,
+  primary: string,
+  cacheDirs: readonly string[] = [],
+  peers: readonly string[] = [],
+): string[] {
   return [
     path.join(configDir, "plugins", "known_marketplaces.json"),
     path.join(configDir, "plugins", "installed_plugins.json"),
@@ -277,7 +289,24 @@ export function pluginSyncWatchList(configDir: string, primary: string, cacheDir
     path.join(primary, "plugins", "installed_plugins.json"),
     path.join(primary, "plugins", "cache"),
     ...cacheDirs,
+    ...peers.map((peer) => path.join(peer, "plugins", "installed_plugins.json")),
   ];
+}
+
+/**
+ * The `peers` for pluginSyncWatchList: each of `configDirs` - every Claude profile's - once,
+ * leaving out `configDir` and `primary`, whose lists the watch list has already.
+ */
+export function pluginSyncPeers(configDirs: readonly string[], configDir: string, primary: string): string[] {
+  const seen = new Set([path.resolve(configDir), path.resolve(primary)]);
+  const peers: string[] = [];
+  for (const dir of configDirs) {
+    const resolved = path.resolve(dir);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    peers.push(resolved);
+  }
+  return peers;
 }
 
 /**
@@ -345,9 +374,14 @@ export async function syncWithStamp<T extends { ok: boolean }>(configDir: string
  * `[[ ... -nt ... ]]` is a builtin in both zsh and bash, so a fresh stamp costs no process at
  * all. Every path is single-quoted, so no `!` can reach a double-quoted string.
  */
-export function renderPosixSyncCheck(configDir: string, primary: string, cacheDirs: readonly string[] = []): string {
+export function renderPosixSyncCheck(
+  configDir: string,
+  primary: string,
+  cacheDirs: readonly string[] = [],
+  peers: readonly string[] = [],
+): string {
   const stamp = posixQuote(pluginSyncStampPath(configDir));
-  const due = pluginSyncWatchList(configDir, primary, cacheDirs).map((watched) => {
+  const due = pluginSyncWatchList(configDir, primary, cacheDirs, peers).map((watched) => {
     const quoted = posixQuote(watched);
     return `( -e ${quoted} && ! ${stamp} -nt ${quoted} )`;
   });

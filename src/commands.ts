@@ -7,6 +7,7 @@ import { isKnownSecretSource, keySourcePhrase } from "./core/key-source.js";
 import {
   isCacheable,
   pluginCacheWatchDirs,
+  pluginSyncPeers,
   pluginSyncStampPath,
   pluginSyncWatchList,
   registryStamp,
@@ -1699,7 +1700,7 @@ export async function runCommand(command: string, args: string[]) {
       const { tool, registry, profile, built } = active;
       const guard = controlledEnvKeys(profile, built);
 
-      let sync: { configDir: string; primary: string; cacheDirs: string[] } | undefined;
+      let sync: { configDir: string; primary: string; cacheDirs: string[]; peers: string[] } | undefined;
       if (tool === "claude") {
         // The config dir _sync-plugins would find in CLAUDE_CONFIG_DIR once these exports are
         // applied: the profile's own, or the primary's, which exports none.
@@ -1708,8 +1709,17 @@ export async function runCommand(command: string, args: string[]) {
         // Synced here, where Node is running anyway, and stamped if it worked, so the check the
         // script carries finds nothing due and starts no second process.
         await syncWithStamp(configDir, () => syncPluginsJson(configDir, primary));
-        // Listed after the sync, as they are now, for the script to watch.
-        sync = { configDir, primary, cacheDirs: await pluginCacheWatchDirs(primary) };
+        // Listed after the sync, as they are now, for the script to watch. So is every other
+        // Claude profile, whose plugin installs this profile's sync brings here.
+        const claudeDirs = Object.values(registry.profiles).flatMap((entry) =>
+          entry?.tool === "claude" && typeof entry.configDir === "string" ? [entry.configDir] : [],
+        );
+        sync = {
+          configDir,
+          primary,
+          cacheDirs: await pluginCacheWatchDirs(primary),
+          peers: pluginSyncPeers(claudeDirs, configDir, primary),
+        };
       }
 
       const format = jsonFlag(args) ? "json" : "posix";
@@ -1720,7 +1730,7 @@ export async function runCommand(command: string, args: string[]) {
               built.unset,
               sync && {
                 stamp: pluginSyncStampPath(sync.configDir),
-                watch: pluginSyncWatchList(sync.configDir, sync.primary, sync.cacheDirs),
+                watch: pluginSyncWatchList(sync.configDir, sync.primary, sync.cacheDirs, sync.peers),
               },
               // What a cached copy must still find profiles.json to be; see writeLaunchCache.
               before === null ? undefined : registryStamp(before),
@@ -1728,7 +1738,7 @@ export async function runCommand(command: string, args: string[]) {
           : [
               LAUNCH_MARKER,
               renderPosixExports(built.env, built.unset, guard),
-              sync ? renderPosixSyncCheck(sync.configDir, sync.primary, sync.cacheDirs) : "",
+              sync ? renderPosixSyncCheck(sync.configDir, sync.primary, sync.cacheDirs, sync.peers) : "",
             ]
               .filter((part) => part !== "")
               .join("\n");
