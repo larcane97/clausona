@@ -38,6 +38,7 @@ import {
   launchCacheDir,
   launchCachePath,
   launchRefPath,
+  pluginSyncPeers,
   pluginSyncStampPath,
   pluginSyncWatchList,
   registryStamp,
@@ -301,11 +302,37 @@ describe("the plugin sync check", () => {
     ]);
   });
 
+  /**
+   * `claude plugin install` in one profile rewrites only that profile's list, and the sync of
+   * another profile is what carries it on. So a change to any other profile's list makes the
+   * sync due too, or the change would wait for something else to change.
+   */
+  it("watches every other Claude profile's installed_plugins.json after the rest", () => {
+    const cacheDir = path.join("/primary", "plugins", "cache", "market");
+    expect(pluginSyncWatchList("/p", "/primary", [cacheDir], ["/a", "/b"]).slice(5)).toEqual([
+      cacheDir,
+      path.join("/a", "plugins", "installed_plugins.json"),
+      path.join("/b", "plugins", "installed_plugins.json"),
+    ]);
+  });
+
+  it("finds those profiles once each, leaving out the profile itself and the primary", () => {
+    const dirs = ["/primary", "/p", "/a", "/a/", "/b", path.join("/c", "..", "b")];
+    expect(pluginSyncPeers(dirs, "/p", "/primary")).toEqual([path.resolve("/a"), path.resolve("/b")]);
+    expect(pluginSyncPeers(dirs, "/primary", "/primary")).toEqual([
+      path.resolve("/p"),
+      path.resolve("/a"),
+      path.resolve("/b"),
+    ]);
+  });
+
   it("single-quotes every path, one with a quote in it included", () => {
-    const line = renderPosixSyncCheck("/home/o'brien/.claude-work", "/home/o'brien/.claude");
+    const peers = ["/home/o'brien/.claude-play"];
+    const line = renderPosixSyncCheck("/home/o'brien/.claude-work", "/home/o'brien/.claude", [], peers);
     const quote = (p: string) => `'${p.replace(/'/g, "'\\''")}'`;
     const stamp = quote(pluginSyncStampPath("/home/o'brien/.claude-work"));
-    const watched = pluginSyncWatchList("/home/o'brien/.claude-work", "/home/o'brien/.claude").map(quote);
+    const watched = pluginSyncWatchList("/home/o'brien/.claude-work", "/home/o'brien/.claude", [], peers).map(quote);
+    expect(watched).toHaveLength(6);
     // Due when a watched path exists and the stamp is not newer than it.
     const due = watched.map((w) => `( -e ${w} && ! ${stamp} -nt ${w} )`).join(" || ");
     expect(line).toBe(`if [[ ! -e ${stamp} || ${due} ]]; then clausona _sync-plugins 2>/dev/null || :; fi`);

@@ -227,6 +227,34 @@ describe("_launch", () => {
     expect(await h.launch("claude")).toContain(`'${path.join(cache, "market", "plugin")}'`);
   });
 
+  /**
+   * An install in another Claude profile rewrites only that profile's list, and this profile's
+   * sync is what brings it here - so the script watches every other Claude profile's list too.
+   * Not a Codex profile's: it has none.
+   */
+  it("watches every other claude profile's installed_plugins.json", async () => {
+    const h = await harness((home) => ({
+      ...subscription(home),
+      profiles: {
+        "claude:default": {
+          tool: "claude",
+          configDir: path.join(home, ".claude"),
+          email: "p@example.com",
+          isPrimary: true,
+        },
+        "claude:work": { tool: "claude", configDir: path.join(home, ".claude-work"), email: "you@example.com" },
+        "claude:play": { tool: "claude", configDir: path.join(home, ".claude-play"), email: "play@example.com" },
+        "codex:work": { tool: "codex", configDir: path.join(home, ".codex-work"), email: "c@d.e" },
+      },
+    }));
+    const play = path.join(h.home, ".claude-play", "plugins", "installed_plugins.json");
+
+    const { sync } = JSON.parse(await h.launch("claude", "--json"));
+
+    expect(sync.watch).toEqual([...pluginSyncWatchList(h.workDir, h.primary), play]);
+    expect(await h.launch("claude")).toContain(`'${play}'`);
+  });
+
   it("gives codex's --json no sync block", async () => {
     const h = await harness((home) =>
       registryWith({ tool: "codex", configDir: path.join(home, ".codex-work"), email: "c@d.e" }, home, "codex:work"),

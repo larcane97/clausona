@@ -351,6 +351,7 @@ links back to your primary directory, so what you set up once is there for every
 ├── projects/              ← own session history (NOT shared by default)
 ├── plugins/               ← own directory: each entry links to ~/.claude/plugins/, except
 │                            the two JSON files that hold paths, kept as per-profile copies
+│                            that a plugin install in any profile reaches
 ├── settings.json →  ~/.claude/settings.json  (symlink to primary)
 └── ...
 ```

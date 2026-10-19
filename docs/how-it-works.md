@@ -78,9 +78,11 @@ For claude, the launch script also decides whether the plugin files need syncing
 starting clausona. Each sync that works leaves a stamp, `plugins/.clausona-synced`, in the
 profile's config directory, and the script runs `clausona _sync-plugins` only when that stamp is
 missing or something the sync reads is at least as new as it: the profile's
-`known_marketplaces.json` or `installed_plugins.json`, or the primary's marketplaces,
-`installed_plugins.json`, plugin cache, or the cache's marketplace and plugin directories. When
-any of those changes, the sync runs on the next launch.
+`known_marketplaces.json` or `installed_plugins.json`, the primary's marketplaces,
+`installed_plugins.json`, plugin cache, or the cache's marketplace and plugin directories, or
+any other Claude profile's `installed_plugins.json`. When any of those changes, the sync runs on
+the next launch, so a plugin installed under one profile reaches another the next time that one
+starts ([Plugin installs](#plugin-installs)).
 
 ## Shared Environment
 
@@ -103,7 +105,8 @@ When you register a new profile, clausona symlinks shared resources from your pr
 ├── mcp-servers/  →  ~/.claude/mcp-servers    (symlink to primary)
 ├── plugins/               ← own directory: each entry links to ~/.claude/plugins/, except
 │                            known_marketplaces.json and installed_plugins.json, kept as
-│                            per-profile copies with their paths rewritten
+│                            per-profile copies with their paths rewritten; a plugin
+│                            installed or updated in one profile reaches the others' copies
 ├── settings.json →  ~/.claude/settings.json  (symlink to primary)
 └── ...
 ```
@@ -217,6 +220,40 @@ that would otherwise stop with "clausona is not initialized" prints the same lin
 `clausona init` refuses to replace the file while it is there, and the dashboard shows the
 line instead of opening init.
 
+### Plugin installs
+
+Claude Code lists the plugins it has installed in `plugins/installed_plugins.json`, with the
+absolute path of each one's cached version, so every Claude profile keeps a copy of its own with
+the paths under its own config directory. The cache itself is shared. `claude plugin install`,
+`update` and `uninstall`, and `/plugin` inside a session, rewrite only the copy of the profile
+they run in. The plugin sync that runs before each launch carries the change to the others.
+
+The primary's copy is the shared list. Each sync reads every profile's copy and compares it with
+what clausona last wrote there or read from it, which it keeps beside the copy in
+`plugins/.clausona-installed-plugins.json`. A plugin a copy has gained or changed since was
+installed or updated in that profile, and one it has lost was uninstalled there. Those changes
+go into the shared list, which is then written to the primary and to the profile that is
+starting. Every other profile gets it when it starts next. A copy that still lists a plugin
+because its profile has not started since the plugin was uninstalled elsewhere is not an
+install, and does not bring the plugin back. When two profiles changed the same plugin, the
+later change wins. An install for one project, at project or local scope, is carried with that
+project's path and apart from an install for the user.
+
+The first sync after upgrading from a version that kept the copies apart has nothing to compare
+with yet. It takes every plugin any profile lists, the newest version of each, and leaves out
+versions that are no longer in the cache. A plugin you had uninstalled in one profile but not
+the others comes back that once; uninstall it again and it stays uninstalled.
+
+A profile whose `plugins/cache` is a directory of its own rather than a link to the primary's,
+which happens when the primary had no plugin cache yet when the profile was set up, caches
+versions the others cannot reach. Its copy is left to itself, as all copies were before.
+`clausona repair <profile>` links its cache to the primary's and sets its own aside in the
+profile's backup; a plugin only that cache held has to be installed again.
+
+`clausona doctor` reports a profile whose copy differs from the primary's as
+`installed_plugins_differ`, a warning that names the plugins and versions. The profile's next
+launch, or `clausona repair <profile>`, brings the two in line.
+
 ### What a Claude profile shares
 
 A claude profile links every entry of the primary's `~/.claude` except the ones below. Claude
@@ -236,7 +273,7 @@ than configuration, and clausona went through it one entry at a time.
 | `.session_ingress_token`, `hfi-auth.json` | own | Tokens of hosted sessions. |
 | `cache/`, `mcp-discovery-cache/`, `stats-cache.json`, `feedback/`, `active-time.json` | own | Caches and ledgers of the account Claude Code runs as: the models it was refused or served, MCP discovery, the `/stats` numbers, feedback drafts waiting to be sent, active time. Shared, two profiles overwrite each other's numbers, and a draft could go out on another account. |
 | `statsig/`, `image-cache/`, `.last-update-result.json`, `gh-pr-status-cache.json`, `.session-stats.json` | own | State and caches for one config directory. |
-| `plugins/` | own directory | Each entry links to the primary's, except the two JSON files that hold paths. |
+| `plugins/` | own directory | Each entry links to the primary's, except the two JSON files that hold paths. The list of installed plugins is kept in step across profiles ([Plugin installs](#plugin-installs)). |
 | `projects/`, `jobs/`, `teams/` | shared with merged sessions | One session's transcript and records, kept together. |
 | `sessions/`, `todos/`, `shell-snapshots/`, `file-history/`, `history.jsonl`, `tasks/`, `session-env/`, `plans/`, `paste-cache/`, `uploads/` | shared | So a session carries across accounts. |
 | A temp file a save left behind, `<file>.tmp.<suffix>` | never linked | It holds nothing a profile reads, and a link to one would stay for good. |

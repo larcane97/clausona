@@ -243,6 +243,10 @@ export type DoctorIssue = {
     | "shared_account_state"
     | "missing_shared_link"
     | "plugins_out_of_sync"
+    // A warning: a profile's plugins/installed_plugins.json lists other plugins or versions than
+    // the primary's - an install, update or uninstall made in one of the two that the profile's
+    // next plugin sync carries across. Only for a profile that shares the primary's plugin cache.
+    | "installed_plugins_differ"
     // A non-primary profile registered on its tool's primary directory itself, which clausona
     // never links or repairs. Settled in the registry, which the message says how to change.
     | "primary_config_dir"

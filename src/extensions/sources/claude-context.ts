@@ -292,8 +292,9 @@ function pluginScope(entry: Record<string, unknown>, homeDir: string): Pick<Plug
 }
 
 /**
- * Every account's `plugins/installed_plugins.json`. These differ by account: clausona seeds a
- * profile's copy from the primary's once, and installs after that land in one account only.
+ * Every account's `plugins/installed_plugins.json`. These can differ by account: an install
+ * lands in one account's list, and reaches the others' only when each is next synced at launch,
+ * and a profile with a plugin cache of its own keeps a list of its own.
  * A profile records install paths under its own dir, which link into the primary's cache, so
  * an install is the same in two accounts when its path resolves to the same folder.
  */
