@@ -273,6 +273,8 @@ const REWRITTEN_WHOLE = new Set(["settings.json", "CLAUDE.md", "keybindings.json
 // Undocumented endpoint that backs Claude Code's own /usage view. Anonymous requests
 // are rejected with a flat one-hour Retry-After, so it is never called without a token.
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
+// Says which account an OAuth access token belongs to: `{ account: { email, ... }, ... }`.
+const PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
 const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
 const OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 
@@ -506,6 +508,28 @@ async function fetchClaudeQuota(credential: ToolCredential, signal: AbortSignal)
   }
 
   return parseClaudeQuota(await response.json());
+}
+
+/**
+ * The email of the account the token signs in as. Anything short of one - a failed request, a
+ * refusal, a body of another shape - is null: the check it serves then leaves the reading as it is.
+ */
+async function claudeCredentialAccount(credential: ToolCredential, signal: AbortSignal): Promise<string | null> {
+  try {
+    const response = await fetch(PROFILE_URL, {
+      headers: {
+        Authorization: `Bearer ${credential.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      signal,
+    });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { account?: { email?: unknown } } | null;
+    const email = body?.account?.email;
+    return typeof email === "string" && email !== "" ? email : null;
+  } catch {
+    return null;
+  }
 }
 
 type RefreshResponse = {
@@ -874,6 +898,7 @@ export const claudeAdapter: ToolAdapter & Required<Pick<ToolAdapter, "sharedSkip
   // We will keep that wiring during Task 11 refactor; the adapter is not the place for it.
   readCredential: readClaudeCredential,
   fetchQuota: fetchClaudeQuota,
+  credentialAccount: claudeCredentialAccount,
   renewCredential: renewClaudeCredential,
   runLogin: runLoginInteractive,
   verifySignIn: verifyClaudeSignIn,

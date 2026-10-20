@@ -1,6 +1,6 @@
 {
   "name": "routing",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Run Claude Code or Codex on whichever clausona account has quota left, and set up, change or explain the routes that pick it.",
   "author": { "name": "larcane97", "url": "https://github.com/larcane97" },
   "homepage": "https://github.com/larcane97/clausona/blob/main/docs/routing.md",

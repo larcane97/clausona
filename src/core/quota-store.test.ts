@@ -10,7 +10,7 @@ import { QUOTA_FRESH_MS, QUOTA_TIMEOUT_MS, QuotaHttpError } from "./quota.js";
 const getAdapter = vi.hoisted(() => vi.fn());
 vi.mock("../tools/registry.js", () => ({ getAdapter }));
 
-const { cachedQuotas, collectQuotas } = await import("./quota-store.js");
+const { cachedQuotas, collectQuotas, forgetQuota } = await import("./quota-store.js");
 
 const NOW = 1_800_000_000_000;
 const TARGET = { id: "claude:work", tool: "claude" as const, configDir: "/tmp/.claude-work" };
@@ -413,6 +413,124 @@ describe("collectQuotas", () => {
     const result: Record<string, QuotaSnapshot> = await collectQuotas([TARGET], { now: NOW, cachePath });
 
     expect(result[TARGET.id]?.state).toBe("missing");
+  });
+});
+
+/**
+ * A profile's store can hold another account's sign-in, and the usage endpoint answers for whoever
+ * the token is: those numbers sat beside the profile's own name (#207).
+ */
+describe("collectQuotas: whose sign-in a reading was taken with", () => {
+  const OWN = { ...TARGET, account: "work@example.com" };
+  const reading = { session: { usedPercent: 37, resetsAt: null }, weekly: { usedPercent: 81, resetsAt: null } };
+
+  function stubSignedInAs(account: string | null, accessToken = "t") {
+    return stubAdapter({
+      readCredential: vi.fn(async () => ({ accessToken, refreshToken: "r" })),
+      fetchQuota: vi.fn(async () => reading),
+      credentialAccount: vi.fn(async () => account),
+    });
+  }
+
+  it("keeps none of another account's numbers, and says whose sign-in it found", async () => {
+    stubSignedInAs("other@example.com");
+
+    const result = await collectQuotas([OWN], { now: NOW, cachePath });
+
+    expect(result[OWN.id]).toEqual({ state: "other_account", fetchedAt: NOW, signedInAs: "other@example.com" });
+    expect(readCacheFile().profiles[OWN.id]).toEqual(result[OWN.id]);
+  });
+
+  it("keeps the reading of the account the profile is registered to", async () => {
+    // Addresses compare case-insensitively, as `clausona login` compares them.
+    stubSignedInAs("Work@Example.com");
+
+    const result = await collectQuotas([OWN], { now: NOW, cachePath });
+
+    expect(result[OWN.id]).toEqual({ ...reading, state: "ok", fetchedAt: NOW });
+  });
+
+  it("keeps the reading when the account cannot be told, and asks again next time", async () => {
+    const adapter = stubSignedInAs(null);
+
+    const first = await collectQuotas([OWN], { now: NOW, cachePath });
+    await collectQuotas([OWN], { now: NOW, cachePath, refresh: true });
+
+    expect(first[OWN.id]?.state).toBe("ok");
+    expect(adapter.credentialAccount).toHaveBeenCalledTimes(2);
+    expect(readCacheFile().identities).toEqual({});
+  });
+
+  it("asks once per token, and keeps a hash of it rather than the token", async () => {
+    const adapter = stubSignedInAs("other@example.com", "token-one");
+
+    await collectQuotas([OWN], { now: NOW, cachePath });
+    const again = await collectQuotas([OWN], { now: NOW, cachePath, refresh: true });
+
+    expect(adapter.credentialAccount).toHaveBeenCalledTimes(1);
+    expect(again[OWN.id]).toMatchObject({ state: "other_account", signedInAs: "other@example.com" });
+    const cacheText = readFileSync(cachePath, "utf8");
+    expect(cacheText).not.toContain("token-one");
+    expect(readCacheFile().identities[OWN.id]).toEqual({
+      token: expect.stringMatching(/^[0-9a-f]{16}$/),
+      account: "other@example.com",
+    });
+  });
+
+  it("asks again about a new token", async () => {
+    stubSignedInAs("other@example.com", "token-one");
+    await collectQuotas([OWN], { now: NOW, cachePath });
+
+    // Signed in again, to the right account this time.
+    const adapter = stubSignedInAs("work@example.com", "token-two");
+    const result = await collectQuotas([OWN], { now: NOW, cachePath, refresh: true });
+
+    expect(adapter.credentialAccount).toHaveBeenCalledTimes(1);
+    expect(result[OWN.id]?.state).toBe("ok");
+  });
+
+  it("checks the renewed credential, the one the numbers were read with", async () => {
+    const adapter = stubAdapter({
+      readCredential: vi.fn(async () => ({ accessToken: "old", refreshToken: "r", expiresAt: NOW - 1 })),
+      renewCredential: vi.fn(async () => ({ accessToken: "new", refreshToken: "r2", expiresAt: NOW + 3600_000 })),
+      fetchQuota: vi.fn(async () => reading),
+      credentialAccount: vi.fn(async () => "work@example.com"),
+    });
+
+    await collectQuotas([OWN], { now: NOW, cachePath });
+
+    expect((adapter.credentialAccount as Mock).mock.calls[0][0]).toMatchObject({ accessToken: "new" });
+  });
+
+  it("asks nothing for a profile with no registered account", async () => {
+    const adapter = stubSignedInAs("other@example.com");
+
+    const result = await collectQuotas([TARGET], { now: NOW, cachePath });
+
+    expect(adapter.credentialAccount).not.toHaveBeenCalled();
+    expect(result[TARGET.id]?.state).toBe("ok");
+  });
+});
+
+describe("forgetQuota", () => {
+  it("drops one profile's reading, so the next read asks again", async () => {
+    const kept = { state: "ok", fetchedAt: NOW, weekly: { usedPercent: 3, resetsAt: null } };
+    seedCache({
+      version: 1,
+      cooldowns: {},
+      profiles: {
+        [TARGET.id]: { state: "other_account", fetchedAt: NOW, signedInAs: "b@example.com" },
+        "claude:b": kept,
+      },
+    });
+
+    await forgetQuota(TARGET.id, { cachePath });
+
+    expect(readCacheFile().profiles).toEqual({ "claude:b": kept });
+  });
+
+  it("does not throw without a cache", async () => {
+    await expect(forgetQuota(TARGET.id, { cachePath })).resolves.toBeUndefined();
   });
 });
 

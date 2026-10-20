@@ -72,10 +72,27 @@ columns, and what to run is printed below the table:
 | --- | --- |
 | `expired` | The sign-in has lapsed past renewal: the provider refused the refresh token (older than ~14 days, or revoked). With `--no-renew`, a lapsed access token reads this way too. Run `clausona login <profile>`. |
 | `signed out` | No credential is stored for the profile. Claude Code leaves an empty one behind when it signs out. Run `clausona login <profile>`. |
+| `other account` | The profile's store holds another account's sign-in, as when Claude Code's own `/login` ran in a session on the profile's directory. Sign in to the right account in the browser, then run `clausona login <profile>`. |
 
 The numbers it last read are left off the row. They are from before the sign-in lapsed,
 and shown dimmed they read as current: an account signed out for a month listed
 `100% now`. `--json` still carries them, with `state` set to `expired` or `missing`.
+
+### Whose sign-in a reading is
+
+The usage endpoint answers for whichever account the stored token belongs to, so a reading
+is checked against the account the profile is registered to before it is shown. For Claude,
+clausona asks `/api/oauth/profile` once per token and remembers the answer by a hash of the
+token, never the token itself. For Codex, the account comes from the id_token stored with
+the tokens in `auth.json`, so nothing is asked. A check that gets no answer changes nothing:
+the reading is shown, and the check is made again on the next read.
+
+When the account is another one, the row says `other account` and no numbers are kept, since
+they are that account's. `--json` has `"state": "other_account"` and `signedInAs`, the
+account the stored sign-in is. The dashboard's panel names it too, and routing skips the
+profile. `clausona doctor` makes its own check, of the account the profile's `.claude.json`
+or `auth.json` names. `clausona login <profile>` drops the reading, so the next `list` reads
+the new sign-in rather than waiting out the cache.
 
 Any other reading that could not be taken keeps the numbers it already has, dimmed, and the
 reason is printed below the table. A dash means there is no reading yet.

@@ -67,12 +67,14 @@ const SIGN_IN_LAPSES: Partial<Record<QuotaSnapshot["state"], string>> = {
   expired: "expired",
   // As routing says it: no credential is stored, and Claude Code leaves an empty one at sign-out.
   missing: "signed out",
+  // The stored sign-in is another account's, and so would be any numbers read with it.
+  other_account: "other account",
 };
 
 /**
  * What a reading says in place of its numbers once the account cannot be used until it signs in
  * again. Those numbers are the last ones read before that, and drawn dimmed they read as current:
- * a codex account signed out for a month listed `100% now`.
+ * a codex account signed out for a month listed `100% now`. Another account's sign-in has none.
  */
 function signInLapse(quota: QuotaSnapshot | undefined): string | undefined {
   return quota && SIGN_IN_LAPSES[quota.state];
@@ -272,6 +274,7 @@ const QUOTA_NOTES: Record<Exclude<QuotaSnapshot["state"], "ok">, string> = {
   missing: "no stored credential — run `clausona login <profile>`",
   cooldown: "quota endpoint is rate limited; retrying later",
   error: "quota lookup failed",
+  other_account: "signed in to another account — run `clausona login <profile>`",
 };
 
 /**
@@ -590,9 +593,14 @@ export function renderUsageSummary(
 }
 
 // ─── Login ──────────────────────────────────────────────────────────
+/** A profile signed in as another account than its own, as doctor says it under the profile. */
+export function signedInAsOther(signedInAs: string, registered: string): string {
+  return `signed in as ${signedInAs}, not ${registered}`;
+}
+
 /** Kept short enough to fit the TUI's one-line status after the header. */
 export function describeOtherAccount(id: string, signedInAs: string, registered: string): string {
-  return `${id} is signed in as ${signedInAs}, not ${registered}`;
+  return `${id} is ${signedInAsOther(signedInAs, registered)}`;
 }
 
 export function describeUnverifiedLogin(id: string): string {
@@ -618,8 +626,13 @@ export function unconfirmedCredentialHint(tool: ToolName, command: string): stri
 }
 
 // ─── Doctor ─────────────────────────────────────────────────────────
-/** Issues that describe a missing credential, which only signing in can resolve. */
-const CREDENTIAL_ISSUE_KINDS = new Set<DoctorIssue["kind"]>(["missing_json", "missing_keychain", "missing_oauth"]);
+/** Issues that describe a missing or wrong credential, which only signing in can resolve. */
+const CREDENTIAL_ISSUE_KINDS = new Set<DoctorIssue["kind"]>([
+  "missing_json",
+  "missing_keychain",
+  "missing_oauth",
+  "other_account",
+]);
 
 /**
  * Issues whose message already names what to do. All but one belong to an API profile,

@@ -13,6 +13,11 @@ export type ToolCredential = {
   expiresAt?: number;
   /** Additional headers the tool's usage endpoint requires. */
   headers?: Record<string, string>;
+  /**
+   * The account the credential signs in as, where the stored credential says so itself (Codex's
+   * id_token, stored with the tokens).
+   */
+  account?: string;
 };
 
 /**
@@ -97,6 +102,11 @@ export type ToolAdapter = {
   // Fetches and normalizes the tool's quota endpoint. Only called with a credential
   // from readCredential; throws QuotaHttpError for non-2xx responses.
   fetchQuota?(credential: ToolCredential, signal: AbortSignal): Promise<QuotaWindows | null>;
+
+  // The account a credential from readCredential signs in as, in the form readAccountInfo
+  // gives it (an email, or Codex's account id), or null when that cannot be told. Never throws.
+  // A profile's store can hold another account's sign-in, whose quota is not the profile's.
+  credentialAccount?(credential: ToolCredential, signal: AbortSignal): Promise<string | null>;
 
   // Exchanges the stored refresh token for a fresh credential AND persists it.
   //

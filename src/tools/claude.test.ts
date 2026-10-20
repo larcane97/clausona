@@ -312,6 +312,46 @@ describe("what doctor says of a link to the primary's", () => {
   });
 });
 
+describe("claudeAdapter.credentialAccount", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  // Put together here, so no line of this file holds a token a secret scanner would match.
+  const credential = { accessToken: ["sk", "ant", "oat01", "fixture", "profile"].join("-") };
+  const ask = () => claudeAdapter.credentialAccount?.(credential, new AbortController().signal);
+
+  it("names the account the token belongs to, asking with the token", async () => {
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ account: { uuid: "u-1", email: "b@example.com" }, organization: {} })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await ask()).toBe("b@example.com");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.anthropic.com/api/oauth/profile");
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({ Authorization: `Bearer ${credential.accessToken}` });
+  });
+
+  it.each([
+    ["a refusal", () => new Response("{}", { status: 401 })],
+    ["a rate limit", () => new Response("{}", { status: 429 })],
+    ["a body with no email", () => new Response(JSON.stringify({ account: { uuid: "u-1" } }))],
+    ["a body that is not JSON", () => new Response("<html>")],
+    [
+      "a request that fails",
+      () => {
+        throw new TypeError("fetch failed");
+      },
+    ],
+  ])("answers nothing to %s", async (_, respond) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => respond()),
+    );
+
+    expect(await ask()).toBeNull();
+  });
+});
+
 describe("temp files left from a save", () => {
   it("are never shared, whatever file they were saving", () => {
     for (const name of [

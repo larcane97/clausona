@@ -138,6 +138,10 @@ describe("formatQuotaInline", () => {
     expect(formatQuotaInline(snapshot({ state: "expired", weekly }))).toBe("expired");
     expect(formatQuotaInline(snapshot({ state: "missing", weekly }))).toBe("signed out");
   });
+
+  it("says another account's sign-in in place of numbers", () => {
+    expect(formatQuotaInline(snapshot({ state: "other_account", signedInAs: "b@example.com" }))).toBe("other account");
+  });
 });
 
 describe("quotaSeverity", () => {
@@ -167,6 +171,7 @@ describe("quotaSeverity", () => {
       "error",
     );
     expect(quotaSeverity({ quota: snapshot({ state: "missing" }) })).toBe("error");
+    expect(quotaSeverity({ quota: snapshot({ state: "other_account", signedInAs: "b@example.com" }) })).toBe("error");
   });
 
   // Its reading is spend, and a key its provider refused is `route budget`'s to say. Taken from
@@ -668,6 +673,48 @@ describe("renderList with a lapsed sign-in", () => {
   });
 });
 
+/**
+ * A profile whose store holds another account's sign-in: the numbers read with it are that
+ * account's, and next to this profile's name they read as its own (#207).
+ */
+describe("renderList with another account's sign-in", () => {
+  const zero = { cost: 0, inputTokens: 0, outputTokens: 0 };
+  const row = (name: string, quota: QuotaSnapshot): ProfileListItem => ({
+    name,
+    tool: "claude",
+    email: `${name.replace("claude:", "")}@example.com`,
+    configDir: `/home/u/.${name}`,
+    isPrimary: false,
+    isActive: false,
+    quota,
+    today: zero,
+    week: zero,
+    month: zero,
+    total: zero,
+  });
+  const live = row("claude:work", snapshot({ weekly: { usedPercent: 41, resetsAt: null } }));
+  const other = row("claude:home", snapshot({ state: "other_account", signedInAs: "work@example.com" }));
+
+  const render = (items: ProfileListItem[], width = 120) => stripAnsi(renderList(items, { width }));
+  const rowFor = (out: string, name: string) => out.split("\n").find((line) => line.includes(name)) ?? "";
+
+  it("says so across the 5H and 7D columns, and below the table what to do", () => {
+    const out = render([live, other]);
+
+    expect(rowFor(out, "claude:home")).toBe(
+      "    claude:home         home@example.com                other account         —           —             —",
+    );
+    expect(out).toContain("other account: signed in to another account — run `clausona login <profile>`");
+  });
+
+  it("fits in the narrowest table", () => {
+    const line = rowFor(render([live, other], LIST_MIN_WIDTH), "claude:home");
+
+    expect(line).toContain("other account");
+    expect(line.length).toBeLessThanOrEqual(LIST_MIN_WIDTH);
+  });
+});
+
 describe("quotaBar", () => {
   it("fills proportionally and always spans ten cells", () => {
     expect(quotaBar(0)).toBe("░░░░░░░░░░");
@@ -876,6 +923,14 @@ describe("renderDoctor next-step hint", () => {
 
   it("suggests login for an unreadable account file", () => {
     const out = stripAnsi(renderDoctor([result([{ kind: "missing_json", message: "x" }])]));
+
+    expect(out).toContain("clausona login claude:work");
+    expect(out).not.toContain("clausona repair");
+  });
+
+  // repair relinks; only a sign-in to the registered account puts its credential back.
+  it("suggests login for a sign-in to another account", () => {
+    const out = stripAnsi(renderDoctor([result([{ kind: "other_account", message: "x" }])]));
 
     expect(out).toContain("clausona login claude:work");
     expect(out).not.toContain("clausona repair");

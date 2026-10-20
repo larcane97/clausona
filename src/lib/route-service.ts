@@ -383,7 +383,7 @@ export function quotaTargets(
       if (target) targets.push(target);
       continue;
     }
-    targets.push({ id: member.id, tool: member.tool, configDir: member.configDir });
+    targets.push({ id: member.id, tool: member.tool, configDir: member.configDir, account: member.email });
   }
   return targets;
 }

@@ -71,6 +71,8 @@ const QUOTA_STATE_NOTE: Record<Exclude<QuotaSnapshot["state"], "ok">, string> = 
   missing: "signed out — clausona login",
   cooldown: "rate limited, retrying later",
   error: "lookup failed",
+  // The account it is signed in as has a row of its own above this.
+  other_account: "another account — clausona login",
 };
 
 /** Row's label box plus its gap: what a row's value does not get of the panel's width. */
@@ -121,6 +123,19 @@ function quotaRows(quota: QuotaSnapshot | undefined, width: number): ReactElemen
             window={quota.scoped}
             live={live}
             width={width}
+          />,
+        ]
+      : []),
+    // A row of its own rather than part of the note: an address in the note was cut off
+    // with the command after it.
+    ...(quota.state === "other_account" && quota.signedInAs
+      ? [
+          <Row
+            key="signed-in-as"
+            label="Signed in as"
+            value={quota.signedInAs}
+            valueColor={color.warning}
+            cut="middle"
           />,
         ]
       : []),

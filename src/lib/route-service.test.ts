@@ -248,7 +248,8 @@ describe("quotaTargets", () => {
       id: "claude:glm",
       api: { baseUrl: "https://gw.example.com", authScheme: "bearer", budget: { usd: 20, per: "month" } },
     });
-    expect(a).toEqual({ id: "claude:a", tool: "claude", configDir: "/home/u/.claude-a" });
+    // A plan's, with the account it is registered to, which its reading is checked against.
+    expect(a).toEqual({ id: "claude:a", tool: "claude", configDir: "/home/u/.claude-a", account: "a@example.com" });
     // A hand-edited API profile with no endpoint has no spend to read.
     expect(quotaTargets(route, membersOf(REGISTRY, "claude"), false).map((target) => target.id)).toEqual(["claude:a"]);
   });

@@ -64,6 +64,30 @@ describe("codexAdapter.readAccountInfo", () => {
   });
 });
 
+describe("codexAdapter.credentialAccount", () => {
+  // The account the stored tokens sign in as, by the rule the account a profile registers is read
+  // with, so the two compare in the same form.
+  it("is the account of the id_token stored with the tokens, in readAccountInfo's form", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "codex-test-"));
+    const auth = (payload: Record<string, unknown>) =>
+      writeFileSync(
+        path.join(dir, "auth.json"),
+        JSON.stringify({ tokens: { id_token: makeJwt(payload), access_token: makeJwt({}), account_id: "uuid-123" } }),
+      );
+    const account = async () => {
+      const credential = await codexAdapter.readCredential?.(dir);
+      if (!credential) throw new Error("no credential");
+      return codexAdapter.credentialAccount?.(credential, new AbortController().signal);
+    };
+
+    auth({ email: "u@example.com" });
+    expect(await account()).toBe("u@example.com");
+    auth({ name: "anon" });
+    expect(await account()).toBe("uuid-123");
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("codexAdapter.sharedAllow", () => {
   const shared = (name: string, mergeSessions = false) => codexAdapter.sharedAllow?.(name, mergeSessions);
 

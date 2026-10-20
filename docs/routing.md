@@ -55,7 +55,8 @@ clausona then goes through four stages and stops at the first one that finds som
    at stage 1 (see [Waiting for an account](#waiting-for-an-account)).
 
 An account that is signed out, or whose sign-in has expired, is skipped at every stage. So is one
-whose quota could not be read. `clausona route explain` gives the reason for each.
+whose quota could not be read, and one whose stored sign-in is another account's, since the quota
+read with it is that account's. `clausona route explain` gives the reason for each.
 
 Readings come from the same 5-minute cache that `clausona list` uses, and a lapsed token is
 renewed the same way. When a new reading fails, the last numbers are used for up to an hour and
@@ -1180,7 +1181,7 @@ Each entry in `members`:
 | `role` | `"pool"` or `"fallback"` |
 | `matchedBy` | The pattern that brought it in |
 | `status` | `"picked"`, `"eligible"` (under the cut, not picked), `"over-limit"` (at or above `maxUsage`, not picked) or `"skipped"` |
-| `skipReason` | null, or one of `"signed-out"`, `"expired"`, `"no-reading"`, `"not-registered"`, `"keeps-own-sessions"` (a resumed run), and for an API profile `"no-spend-limit"`, `"spend-not-reported"` or `"spend-unread"` |
+| `skipReason` | null, or one of `"signed-out"`, `"expired"`, `"other-account"` (its stored sign-in is another account's), `"no-reading"`, `"not-registered"`, `"keeps-own-sessions"` (a resumed run), and for an API profile `"no-spend-limit"`, `"spend-not-reported"` or `"spend-unread"` |
 | `usage` | `{ "percent", "window", "stale" }` with `window` `"5H"`, `"7D"`, the name of the limit on the model (`"Opus"`, `"GPT-5.3-Codex-Spark 7D"`) when that is the highest, or `"budget"` for an API profile, or null |
 | `fiveHour`, `sevenDay` | `{ "usedPercent", "resetsAt" }` with `resetsAt` an ISO time or null, or null |
 | `scoped` | The account's limit on the model `--model` named, as `{ "label", "usedPercent", "resetsAt" }` (of a Codex limit with two windows, the higher), or null without `--model` or such a limit |

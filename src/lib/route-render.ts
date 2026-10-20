@@ -66,6 +66,8 @@ export function skipText(row: Pick<Row, "id" | "skip">): string {
       return `signed out (clausona login ${row.id})`;
     case "expired":
       return `sign-in expired (clausona login ${row.id})`;
+    case "other-account":
+      return `signed in to another account (clausona login ${row.id})`;
     case "no-reading":
       return "no quota reading (clausona list --refresh)";
     case "not-registered":
@@ -759,6 +761,8 @@ const UNREAD_WORDS: Record<Exclude<QuotaState, "ok">, string> = {
   expired: "the provider refused the spend request (401/403)",
   cooldown: "the provider is rate limiting; clausona asks again later",
   error: "the request failed",
+  // A plan sign-in's state, which a spend reading never has: said as plainly, should one turn up.
+  other_account: "the reading was taken as another account",
 };
 
 /** Why a row has no usage, as `route budget` says it; undefined when it has one. */

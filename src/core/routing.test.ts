@@ -97,6 +97,13 @@ describe("usageOf", () => {
     expect(usageOf(snap(1, 1, { state: "expired" }), NOW)).toEqual({ skip: "expired" });
     expect(usageOf(snap(undefined, undefined), NOW)).toEqual({ skip: "no-reading" });
   });
+
+  // Its store holds another account's sign-in: whatever numbers it carries are that account's.
+  it("skips an account signed in to another account", () => {
+    expect(usageOf(snap(1, 1, { state: "other_account", signedInAs: "b@example.com" }), NOW)).toEqual({
+      skip: "other-account",
+    });
+  });
 });
 
 describe("model limits", () => {

@@ -28,6 +28,8 @@ type Options = {
   platform: NodeJS.Platform;
   /** Contents of the profile's .credentials.json, or null to leave the profile without one. */
   credential: string | null;
+  /** The account the profile's .claude.json says it is signed in as; its registered one by default. */
+  signedInAs?: string;
 };
 
 /**
@@ -35,7 +37,11 @@ type Options = {
  * against it. Both profiles get a valid .claude.json so the only issues that can surface
  * are credential ones.
  */
-async function runDoctor({ platform, credential }: Options): Promise<DoctorProfileResult[]> {
+async function runDoctor({
+  platform,
+  credential,
+  signedInAs = "work@example.com",
+}: Options): Promise<DoctorProfileResult[]> {
   currentHome = mkdtempSync(path.join(tmpdir(), "clausona-doctorhome-"));
   temps.push(currentHome);
 
@@ -47,7 +53,7 @@ async function runDoctor({ platform, credential }: Options): Promise<DoctorProfi
 
   const account = (email: string) => JSON.stringify({ oauthAccount: { emailAddress: email } });
   writeFileSync(path.join(currentHome, ".claude.json"), account("primary@example.com"));
-  writeFileSync(path.join(work, ".claude.json"), account("work@example.com"));
+  writeFileSync(path.join(work, ".claude.json"), account(signedInAs));
   // The primary always has a credential; only the secondary varies.
   writeFileSync(path.join(primary, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "P" } }));
   if (credential !== null) writeFileSync(path.join(work, ".credentials.json"), credential);
@@ -113,6 +119,22 @@ describe("doctorProfiles credential check off macOS", () => {
 
     expect(kinds(results, "claude:work")).not.toContain("missing_oauth");
     expect(kinds(results, "claude:default")).not.toContain("missing_oauth");
+  });
+});
+
+describe("doctorProfiles account check", () => {
+  // A sign-in clausona did not start - Claude Code's own /login in the profile's dir - stores
+  // whichever account the browser had (#207).
+  it("reports a profile signed in to another account than the one registered", async () => {
+    const results = await runDoctor({ platform: "linux", credential: WITH_TOKEN, signedInAs: "home@example.com" });
+
+    const work = results.find((r) => r.name === "claude:work");
+    expect(work?.issues).toContainEqual({
+      kind: "other_account",
+      message: "signed in as home@example.com, not work@example.com",
+    });
+    expect(work?.healthy).toBe(false);
+    expect(kinds(results, "claude:default")).not.toContain("other_account");
   });
 });
 

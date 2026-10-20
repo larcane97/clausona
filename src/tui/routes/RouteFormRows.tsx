@@ -177,12 +177,13 @@ export function radioLines(options: Array<[string, string]>, width: number): num
 }
 
 /**
- * Why an account has no quota to show, in the Routes screen's words: signed out or its sign-in
- * expired. Not a missing reading, which an account read as the form opens has for a moment.
+ * Why an account has no quota to show, in the Routes screen's words: signed out, its sign-in
+ * expired, or signed in to another account. Not a missing reading, which an account read as the
+ * form opens has for a moment.
  */
 function noQuotaReason(id: string, snapshot: QuotaSnapshot | undefined, now: number): string {
   const { skip } = usageOf(snapshot, now);
-  return skip === "signed-out" || skip === "expired" ? skipReason({ id, skip }) : "";
+  return skip === "signed-out" || skip === "expired" || skip === "other-account" ? skipReason({ id, skip }) : "";
 }
 
 /**

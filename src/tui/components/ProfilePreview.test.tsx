@@ -313,6 +313,15 @@ describe("ProfilePreview quota", () => {
 
     expect(frame).toContain("signed out — clausona login");
   });
+
+  // The row says `other account`; the panel says which.
+  it("names the account another account's sign-in is", () => {
+    const quota = { state: "other_account" as const, fetchedAt: Date.now(), signedInAs: "b@example.com" };
+    const frame = panelFor({ ...subscription, quota });
+
+    expect(frame).toMatch(/Signed in as\s+b@example\.com/);
+    expect(frame).toContain("another account — clausona login");
+  });
 });
 
 /**

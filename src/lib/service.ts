@@ -20,6 +20,7 @@ import {
 import { constants, homedir, tmpdir } from "node:os";
 import path from "node:path";
 
+import { isOtherAccount } from "../core/account.js";
 import { checkBaseUrl, hasBareUserinfo, isAnthropicHost, sendsKeyInClear } from "../core/api-url.js";
 import { claudeDaemonRunning } from "../core/claude-daemon.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
@@ -41,7 +42,7 @@ import {
   relocateInstalls,
 } from "../core/plugin-installs.js";
 import { spawnCommand } from "../core/process.js";
-import { cachedQuotas, collectQuotas, type QuotaTarget } from "../core/quota-store.js";
+import { cachedQuotas, collectQuotas, forgetQuota, type QuotaTarget } from "../core/quota-store.js";
 import { isV1Registry, migrateRegistryV1toV2, setActiveProfile } from "../core/registry.js";
 import { codexProcessesFor } from "../core/running-codex.js";
 import { createSharedLink, inspectSharedLink } from "../core/shared-links.js";
@@ -68,7 +69,7 @@ import type {
   UsagePeriod,
   UsageStore,
 } from "../types.js";
-import { toolProduct } from "./format.js";
+import { signedInAsOther, toolProduct } from "./format.js";
 import {
   buildProfileEnv,
   CREDENTIAL_ENV_KEYS,
@@ -2355,6 +2356,7 @@ export async function listProfiles(options: ListProfilesOptions = {}): Promise<P
         id,
         tool: profile.tool,
         configDir: profile.configDir,
+        account: profile.email,
       }));
     // Its spend is shown as it was last read, by `route budget` or a routed run: reading it here
     // would send its key to its provider on every list.
@@ -2401,7 +2403,7 @@ export async function listProfiles(options: ListProfilesOptions = {}): Promise<P
  * can paint immediately and fill quota in once the network settles.
  */
 export async function fetchProfileQuotas(
-  items: Pick<ProfileListItem, "name" | "tool" | "kind" | "configDir">[],
+  items: Pick<ProfileListItem, "name" | "tool" | "kind" | "configDir" | "email">[],
   options: { refresh?: boolean; renew?: boolean } = {},
 ): Promise<Record<string, QuotaSnapshot>> {
   const [plans, spend] = await Promise.all([
@@ -2410,7 +2412,7 @@ export async function fetchProfileQuotas(
       // asking for one costs a credential lookup and answers `missing`.
       items
         .filter((item) => item.kind !== "api")
-        .map((item) => ({ id: item.name, tool: item.tool, configDir: item.configDir })),
+        .map((item) => ({ id: item.name, tool: item.tool, configDir: item.configDir, account: item.email })),
       options,
     ),
     // Its spend as last read, as listProfiles shows it: the dashboard resolves no key.
@@ -2685,6 +2687,11 @@ export async function doctorProfiles(
               ? ".claude.json is missing or missing oauthAccount.emailAddress"
               : "auth.json is missing or id_token is unparseable",
         });
+      } else if (profile.email && isOtherAccount(profile.email, accountInfo.email)) {
+        // A sign-in clausona did not start - Claude Code's own /login in a session on the
+        // profile's dir, say - stores whichever account the browser had, and the profile then
+        // runs on that account's plan.
+        issues.push({ kind: "other_account", message: signedInAsOther(accountInfo.email, profile.email) });
       }
 
       // The Keychain only exists on macOS, and the probe returns false everywhere else
@@ -4381,18 +4388,6 @@ export async function addApiProfile(options: {
 }
 
 /**
- * Whether a sign-in landed on a different account than the one registered. Codex records
- * the account id instead of an email when its id_token carries none, so only values of
- * the same form are compared: two emails case-insensitively, two ids exactly. An email
- * against an id could be the same account and is not reported.
- */
-export function isOtherAccount(registered: string, signedInAs: string): boolean {
-  const isEmail = registered.includes("@");
-  if (isEmail !== signedInAs.includes("@")) return false;
-  return isEmail ? signedInAs.toLowerCase() !== registered.toLowerCase() : signedInAs !== registered;
-}
-
-/**
  * After a login that reported success: why the tool does not confirm a stored credential for
  * `configDir`, or null when it does or has no way to check (#24). The check runs with every
  * variable that could authenticate or route the tool without that credential cleared.
@@ -4448,6 +4443,9 @@ export async function loginProfile(id: string): Promise<LoginResult> {
   const adapter = getAdapter(profile.tool);
   const loggedIn = await adapter.runLogin(profile.configDir);
   if (!loggedIn) throw new Error(`${profile.tool} login failed.`);
+  // The cached reading is the sign-in this one replaced: `other account` or `expired` for up to
+  // five minutes more, on the list and the dashboard. Forgotten, they read the new one.
+  await forgetQuota(id);
   const unconfirmed = await unconfirmedSignIn(adapter, profile.configDir);
   if (unconfirmed?.reason === "signed_out") {
     throw noCredentialError(profile.tool, id, unconfirmed.detail, `clausona login ${id}`);

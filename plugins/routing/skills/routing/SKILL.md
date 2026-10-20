@@ -41,7 +41,8 @@ the help.) A user who would rather look through routes on that screen can run it
 - Strategies: `round-robin` (default; the account picked longest ago, a never-picked one
   first), `headroom` (lowest usage), `expiring` (lowest usage among accounts whose weekly limit
   resets within 24 hours; with none, as `headroom`).
-- Signed-out, expired and unreadable accounts are skipped at every stage.
+- Signed-out, expired and unreadable accounts are skipped at every stage, and so is one whose
+  stored sign-in is another account's.
 - An API profile in a route (named exactly; no pattern matches one) is ranked by its spend as a
   share of its limit: a clausona budget (`clausona route budget`), else the limit set on its
   provider key. One with no limit, whose provider reports no spend, or whose spend could not be
@@ -70,8 +71,9 @@ clausona route budget --json               # every API profile: its limit, whose
   be picked, so read `outcome.kind`.
 - `members`, one per account: `status` is `picked`, `eligible` (under the cut, not picked),
   `over-limit` (at or above `maxUsage`) or `skipped`. A skipped one has `skipReason`:
-  `signed-out`, `expired`, `no-reading`, `not-registered`, `keeps-own-sessions`, or for an API
-  profile `no-spend-limit`, `spend-not-reported` or `spend-unread`. Each also has `usage`,
+  `signed-out`, `expired`, `other-account` (its stored sign-in is another account's),
+  `no-reading`, `not-registered`, `keeps-own-sessions`, or for an API profile `no-spend-limit`,
+  `spend-not-reported` or `spend-unread`. Each also has `usage`,
   `fiveHour`, `sevenDay` and `lastPickedAt`, `scoped` (`{"label", "usedPercent", "resetsAt"}`,
   its limit on the `--model` model, of a Codex limit with two windows the higher, or null) and
   `budget` (an API profile's `{"usedPercent", "spentUsd", "limitUsd", "source", "per",
