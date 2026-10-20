@@ -44,6 +44,8 @@ export const BUDGET_WINDOW = "budget";
 export type SkipReason =
   | "signed-out"
   | "expired"
+  // The account's store holds another account's sign-in, whose quota is not this one's.
+  | "other-account"
   | "no-reading"
   | "not-registered"
   | "keeps-own-sessions"
@@ -198,6 +200,7 @@ export function usageOf(
   if (!snapshot) return { skip: "no-reading" };
   if (snapshot.state === "missing") return { skip: "signed-out" };
   if (snapshot.state === "expired") return { skip: "expired" };
+  if (snapshot.state === "other_account") return { skip: "other-account" };
   const present: Array<[string, QuotaWindow]> = [];
   if (snapshot.session) present.push(["5H", snapshot.session]);
   if (snapshot.weekly) present.push(["7D", snapshot.weekly]);

@@ -104,13 +104,17 @@ export type QuotaWindows = {
  * `missing` - no credential on disk for this profile
  * `cooldown`- the endpoint returned 429; requests are paused until it lifts
  * `error`   - network, timeout, or unparseable response
+ * `other_account` - the stored sign-in is another account than the profile's; its numbers are
+ *             that account's, so none are kept
  */
-export type QuotaState = "ok" | "expired" | "missing" | "cooldown" | "error";
+export type QuotaState = "ok" | "expired" | "missing" | "cooldown" | "error" | "other_account";
 
 export type QuotaSnapshot = QuotaWindows & {
   state: QuotaState;
   /** ms epoch of the fetch that produced these windows. */
   fetchedAt: number;
+  /** With `other_account` only: the account the stored sign-in is. */
+  signedInAs?: string;
   /** An API profile's: the last spend its provider reported, kept through a failed read for its baselines. */
   spend?: SpendReading;
   /**
@@ -232,6 +236,8 @@ export type DoctorIssue = {
     | "missing_json"
     | "missing_oauth"
     | "missing_keychain"
+    // The account the profile's sign-in is stored for is not the one it is registered to.
+    | "other_account"
     | "broken_symlink"
     | "local_override"
     | "stale_symlink"

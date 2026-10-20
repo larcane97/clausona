@@ -112,6 +112,7 @@ describe("skipText", () => {
     const row = (skip: SkipReason): Row => ({ id: "claude:old", role: "pool", pattern: "*", skip, status: "skipped" });
     expect(skipText(row("signed-out"))).toBe("signed out (clausona login claude:old)");
     expect(skipText(row("expired"))).toBe("sign-in expired (clausona login claude:old)");
+    expect(skipText(row("other-account"))).toBe("signed in to another account (clausona login claude:old)");
     expect(skipText(row("no-reading"))).toBe("no quota reading (clausona list --refresh)");
     expect(skipText(row("not-registered"))).toBe("not registered");
     expect(skipText(row("keeps-own-sessions"))).toBe("keeps its own sessions, so it cannot resume a shared one");

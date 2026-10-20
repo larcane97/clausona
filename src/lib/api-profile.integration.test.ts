@@ -1669,6 +1669,17 @@ describe("listProfiles with an API profile", () => {
     expect(targets.map((target) => target.id)).toEqual(["claude:default"]);
   });
 
+  // The account the reading is checked against: without it, another account's sign-in in the
+  // profile's store lists that account's quota beside this one's name (#207).
+  it("hands a plan profile's registered account to the quota read", async () => {
+    const targets = recordQuotaTargets();
+    const h = await harness();
+
+    await h.service.listProfiles({ quota: true });
+
+    expect(targets).toEqual([expect.objectContaining({ id: "claude:default", account: "primary@example.com" })]);
+  });
+
   it("leaves an API profile with no quota, so no state and no footnote", async () => {
     recordQuotaTargets();
     const h = await harness();

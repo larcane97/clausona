@@ -145,22 +145,14 @@ function codexUnsharedRisk(name: string): UnsharedRisk {
   };
 }
 
-async function readCodexAccount(configDir: string): Promise<AccountInfo | null> {
-  const authPath = path.join(configDir, "auth.json");
-  let raw: string;
-  try {
-    raw = await readFile(authPath, "utf8");
-  } catch {
-    return null;
-  }
-  let parsed: { tokens?: { id_token?: string; account_id?: string } };
-  try {
-    parsed = JSON.parse(raw) as typeof parsed;
-  } catch {
-    return null;
-  }
-  const idToken = parsed.tokens?.id_token;
-  const accountId = parsed.tokens?.account_id;
+/**
+ * The account auth.json's tokens sign in as: the id_token's email, else the account id. One rule
+ * for the account a profile is registered to and the one its stored credential is checked against,
+ * so the two are always in the same form.
+ */
+function tokensAccount(tokens: CodexTokens | undefined): AccountInfo | null {
+  const idToken = tokens?.id_token;
+  const accountId = tokens?.account_id;
 
   // Try JWT id_token path first
   if (idToken) {
@@ -178,6 +170,10 @@ async function readCodexAccount(configDir: string): Promise<AccountInfo | null> 
   // Fallback: use account_id (API-key auth, or JWT-without-email edge case)
   if (accountId) return { email: accountId, orgName: undefined };
   return null;
+}
+
+async function readCodexAccount(configDir: string): Promise<AccountInfo | null> {
+  return tokensAccount((await readCodexAuth(configDir))?.tokens);
 }
 
 const USAGE_URL = "https://chatgpt.com/backend-api/codex/usage";
@@ -222,6 +218,8 @@ function toCodexCredential(auth: CodexAuth | null): ToolCredential | null {
     refreshToken: auth?.tokens?.refresh_token,
     expiresAt: typeof expSeconds === "number" ? expSeconds * 1000 : undefined,
     headers: accountId ? { "chatgpt-account-id": accountId } : undefined,
+    // From the id_token stored with these tokens, which a renewal replaces with its own.
+    account: tokensAccount(auth?.tokens)?.email,
   };
 }
 
@@ -327,6 +325,8 @@ export const codexAdapter: ToolAdapter = {
   unixSockets: CODEX_UNIX_SOCKETS,
   readCredential: readCodexCredential,
   fetchQuota: fetchCodexQuota,
+  // auth.json says whose its tokens are, so nothing is asked.
+  credentialAccount: async (credential) => credential.account ?? null,
   renewCredential: renewCodexCredential,
   runLogin: runCodexLogin,
 };

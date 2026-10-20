@@ -7,6 +7,7 @@ import { isDeepStrictEqual } from "node:util";
 import { getAdapter } from "../tools/registry.js";
 import type { ToolCredential } from "../tools/types.js";
 import type { QuotaSnapshot, QuotaWindows, ToolName } from "../types.js";
+import { isOtherAccount } from "./account.js";
 import { checkBaseUrl } from "./api-url.js";
 import { acquireFileLock } from "./file-lock.js";
 import { cooldownUntil, isFresh, QUOTA_TIMEOUT_MS, QuotaHttpError } from "./quota.js";
@@ -21,6 +22,12 @@ const RENEW_MARGIN_MS = 60 * 1000;
 /** A lock older than this is treated as abandoned by a crashed process. */
 const LOCK_STALE_MS = 60 * 1000;
 
+/**
+ * The account a profile's stored sign-in was found to be, and the access token it was found for,
+ * as a hash: the token itself is never written here.
+ */
+type Identity = { token: string; account: string };
+
 type QuotaCache = {
   version: 1;
   /**
@@ -29,12 +36,14 @@ type QuotaCache = {
    */
   cooldowns: Record<string, number>;
   profiles: Record<string, QuotaSnapshot>;
+  /** By profile id: whose sign-in each one's store held, so the same token is not asked about again. */
+  identities: Record<string, Identity>;
 };
 
 // Must build a fresh object every call: a shared constant would be spread shallowly,
 // leaving every caller mutating the same `cooldowns` and `profiles` maps.
 function emptyCache(): QuotaCache {
-  return { version: 1, cooldowns: {}, profiles: {} };
+  return { version: 1, cooldowns: {}, profiles: {}, identities: {} };
 }
 
 async function readCache(cachePath: string): Promise<QuotaCache> {
@@ -45,6 +54,8 @@ async function readCache(cachePath: string): Promise<QuotaCache> {
       version: 1,
       cooldowns: parsed.cooldowns ?? {},
       profiles: parsed.profiles ?? {},
+      // An older clausona's cache has none: every profile's account is asked once more.
+      identities: parsed.identities ?? {},
     };
   } catch {
     return emptyCache();
@@ -110,6 +121,11 @@ export type QuotaTarget = {
   id: string;
   tool: ToolName;
   configDir: string;
+  /**
+   * The account the profile is registered to. A reading taken with another account's sign-in is
+   * not the profile's, and comes back `other_account`. Absent or empty, nothing is checked.
+   */
+  account?: string;
   /** An API profile's: its spend is read from its provider, instead of plan quota from the tool's. */
   api?: ApiQuotaTarget;
 };
@@ -250,6 +266,43 @@ async function fetchSpend(
   }
 }
 
+/** What a fetch settles to: the reading, a 429's pause, and whose sign-in it found. */
+type Fetched = { snapshot: QuotaSnapshot; cooldown?: number; identity?: Identity };
+
+/** Which access token an identity was found for, without keeping the token. */
+const tokenKey = (accessToken: string) => crypto.createHash("sha256").update(accessToken).digest("hex").slice(0, 16);
+
+/**
+ * A reading checked against the account the profile is registered to. A profile's store can hold
+ * another account's sign-in - Claude Code's own /login in a session on the profile's dir, say -
+ * and the usage endpoint answers for whichever account the token is, so those numbers would sit
+ * beside the profile's name. They are dropped, and the reading says whose sign-in it found.
+ *
+ * The account is asked once per token: a token whose account is known by its hash is not asked
+ * about again. A check that gets no answer changes nothing, and is asked again next time.
+ */
+async function ownReading(
+  target: QuotaTarget,
+  credential: ToolCredential,
+  snapshot: QuotaSnapshot,
+  known: Identity | undefined,
+  signal: AbortSignal,
+): Promise<Fetched> {
+  const adapter = getAdapter(target.tool);
+  if (!target.account || !adapter.credentialAccount) return { snapshot };
+
+  const token = tokenKey(credential.accessToken);
+  let identity: Identity | undefined;
+  let account = known?.token === token && typeof known.account === "string" ? known.account : null;
+  if (account === null) {
+    account = await adapter.credentialAccount(credential, signal).catch(() => null);
+    if (account) identity = { token, account };
+  }
+  const found = identity ? { identity } : {};
+  if (!account || !isOtherAccount(target.account, account)) return { snapshot, ...found };
+  return { snapshot: { state: "other_account", fetchedAt: snapshot.fetchedAt, signedInAs: account }, ...found };
+}
+
 async function fetchOne(
   target: QuotaTarget,
   cache: QuotaCache,
@@ -257,7 +310,7 @@ async function fetchOne(
   allowRenew: boolean,
   lockDir: string,
   fetchImpl: typeof fetch,
-): Promise<{ snapshot: QuotaSnapshot; cooldown?: number }> {
+): Promise<Fetched> {
   const cached = cache.profiles[target.id];
   if (target.api) return fetchSpend({ ...target, api: target.api }, cached, now, fetchImpl);
   const adapter = getAdapter(target.tool);
@@ -303,7 +356,9 @@ async function fetchOne(
       try {
         const windows = await adapter.fetchQuota(credential, controller.signal);
         if (!windows) return { snapshot: degraded("error", cached, now) };
-        return { snapshot: { ...windows, state: "ok", fetchedAt: now } };
+        // The credential as it is now, after any renewal: the token the numbers were read with.
+        const reading: QuotaSnapshot = { ...windows, state: "ok", fetchedAt: now };
+        return await ownReading(target, credential, reading, cache.identities[target.id], controller.signal);
       } catch (error) {
         if (error instanceof QuotaHttpError) {
           // A token can be rejected while still looking valid by the clock — revoked
@@ -400,9 +455,10 @@ export async function collectQuotas(
   );
 
   pending.forEach((target, index) => {
-    const { snapshot, cooldown } = settled[index];
+    const { snapshot, cooldown, identity } = settled[index];
     result[target.id] = snapshot;
     cache.profiles[target.id] = snapshot;
+    if (identity) cache.identities[target.id] = identity;
     if (cooldown !== undefined) {
       // One 429 pauses the whole tool: the limit is per-IP, not per-account, so
       // retrying with a different profile's token would only extend the block. An API
@@ -427,4 +483,17 @@ export async function cachedQuotas(
   if (ids.length === 0) return {};
   const cache = await readCache(options.cachePath ?? DEFAULT_CACHE_PATH);
   return Object.fromEntries(ids.flatMap((id) => (Object.hasOwn(cache.profiles, id) ? [[id, cache.profiles[id]]] : [])));
+}
+
+/**
+ * Drops a profile's cached reading, so the next `list` or dashboard reads it again: after a
+ * sign-in, the reading is of the one it replaced. Never throws; a cache that cannot be written
+ * only serves the old reading until it goes stale.
+ */
+export async function forgetQuota(id: string, options: { cachePath?: string } = {}): Promise<void> {
+  const cachePath = options.cachePath ?? DEFAULT_CACHE_PATH;
+  const cache = await readCache(cachePath);
+  if (!Object.hasOwn(cache.profiles, id)) return;
+  delete cache.profiles[id];
+  await writeCache(cachePath, cache);
 }

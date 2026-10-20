@@ -71,7 +71,14 @@ const QUOTA_STATE_NOTE: Record<Exclude<QuotaSnapshot["state"], "ok">, string> = 
   missing: "signed out — clausona login",
   cooldown: "rate limited, retrying later",
   error: "lookup failed",
+  other_account: "another account — clausona login",
 };
+
+/** The note under a reading that is not current. Another account's sign-in names the account. */
+function quotaStateNote(state: Exclude<QuotaSnapshot["state"], "ok">, signedInAs: string | undefined): string {
+  if (state === "other_account" && signedInAs) return `signed in as ${signedInAs} — clausona login`;
+  return QUOTA_STATE_NOTE[state];
+}
 
 /** Row's label box plus its gap: what a row's value does not get of the panel's width. */
 const LABEL_COLUMN = 13;
@@ -132,8 +139,8 @@ function quotaRows(quota: QuotaSnapshot | undefined, width: number): ReactElemen
             // Numbers shown for a failed lookup are a last-known reading, so say how old.
             value={
               hasWindows
-                ? `${QUOTA_STATE_NOTE[quota.state]} · ${formatAge(quota.fetchedAt)}`
-                : QUOTA_STATE_NOTE[quota.state]
+                ? `${quotaStateNote(quota.state, quota.signedInAs)} · ${formatAge(quota.fetchedAt)}`
+                : quotaStateNote(quota.state, quota.signedInAs)
             }
             valueColor={color.warning}
           />,
