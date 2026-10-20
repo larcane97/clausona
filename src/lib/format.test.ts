@@ -704,9 +704,7 @@ describe("renderList with another account's sign-in", () => {
     expect(rowFor(out, "claude:home")).toBe(
       "    claude:home         home@example.com                other account         —           —             —",
     );
-    expect(out).toContain(
-      "other account: stored sign-in is another account's — sign in to the right one in the browser, then run `clausona login <profile>`",
-    );
+    expect(out).toContain("other account: signed in to another account — run `clausona login <profile>`");
   });
 
   it("fits in the narrowest table", () => {

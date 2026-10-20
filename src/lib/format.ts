@@ -274,8 +274,7 @@ const QUOTA_NOTES: Record<Exclude<QuotaSnapshot["state"], "ok">, string> = {
   missing: "no stored credential — run `clausona login <profile>`",
   cooldown: "quota endpoint is rate limited; retrying later",
   error: "quota lookup failed",
-  other_account:
-    "stored sign-in is another account's — sign in to the right one in the browser, then run `clausona login <profile>`",
+  other_account: "signed in to another account — run `clausona login <profile>`",
 };
 
 /**

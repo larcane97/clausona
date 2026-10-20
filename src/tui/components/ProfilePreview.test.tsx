@@ -319,7 +319,8 @@ describe("ProfilePreview quota", () => {
     const quota = { state: "other_account" as const, fetchedAt: Date.now(), signedInAs: "b@example.com" };
     const frame = panelFor({ ...subscription, quota });
 
-    expect(frame).toContain("signed in as b@example.com — clausona login");
+    expect(frame).toMatch(/Signed in as\s+b@example\.com/);
+    expect(frame).toContain("another account — clausona login");
   });
 });
 
