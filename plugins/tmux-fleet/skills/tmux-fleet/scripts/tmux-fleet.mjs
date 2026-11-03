@@ -56,6 +56,8 @@ const WAKE = new Set(["stopped", "failed", "blocked", "ended", "bell"]);
 const WORKING = new Set(["sent", "working"]);
 // Characters of a message an event keeps. A long final report runs to about 8000.
 const MESSAGE_MAX = 8000;
+// How long a new pane gets to reach its folder before it is refused for standing somewhere else.
+const PANE_SETTLE_MS = 3000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -363,7 +365,7 @@ function setWindow(window, values) {
   for (const [key, value] of Object.entries(values)) tmux(["set-option", "-w", "-t", window, key, value]);
 }
 
-function start(v, rest) {
+async function start(v, rest) {
   if (!NAME.test(v.name ?? "")) {
     throw new CliError(
       "--name must be lowercase letters, digits, - or _, start with a letter, and be 32 characters at most",
@@ -418,13 +420,23 @@ function start(v, rest) {
       "#{window_id} #{pane_id}",
     ]).split(" ");
   }
-  // The launch line is typed into this shell, so it must stand in the worktree.
-  const cwd = tmux(["display-message", "-p", "-t", pane, "#{pane_current_path}"]);
-  let real = cwd;
-  try {
-    real = realpathSync(cwd);
-  } catch {
-    // not a folder this process can see
+  // The launch line is typed into this shell, so it must stand in the worktree. tmux answers right
+  // after the fork, and the pane's process changes directory after that: later still on a systemd
+  // host, where it first asks for a cgroup scope of its own. Until then the pane reads as standing
+  // where the tmux server started, so it gets a moment to arrive before that is taken as an answer.
+  const settleBy = Date.now() + PANE_SETTLE_MS;
+  let cwd;
+  let real;
+  for (;;) {
+    cwd = tmux(["display-message", "-p", "-t", pane, "#{pane_current_path}"]);
+    real = cwd;
+    try {
+      real = realpathSync(cwd);
+    } catch {
+      // not a folder this process can see
+    }
+    if (!cwd || real === worktree || Date.now() >= settleBy) break;
+    await sleep(20);
   }
   if (cwd && real !== worktree) {
     tmux(existing ? ["kill-pane", "-t", pane] : ["kill-window", "-t", window]);
