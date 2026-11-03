@@ -4,10 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>tmux에서 Claude Code(클로드 코드)와 Codex 에이전트를 계정별로 병렬 실행하기 | clausona</title>
-  <meta name="description" content="tmux 창마다 다른 계정이나 DeepSeek 같은 API 모델로 에이전트를 띄우고, Claude Code나 Codex 세션 하나가 작업을 나눠 맡긴 뒤 결과를 확인하게 하는 방법. GUI가 필요 없어서 SSH로 접속한 서버에서도 됩니다. tmux-fleet 플러그인을 설치하고 요청하면 됩니다.">
+  <meta name="description" content="tmux 창마다 다른 계정이나 DeepSeek 같은 API 모델로 에이전트를 띄우고, Claude Code나 Codex 세션 하나가 작업을 나눠 맡긴 뒤 결과를 확인하게 하는 방법. GUI가 필요 없어서 SSH로 접속한 서버에서도 됩니다.">
   <link rel="canonical" href="https://larcane97.github.io/clausona/ko/parallel-agents-in-tmux/">
   <link rel="alternate" hreflang="en" href="https://larcane97.github.io/clausona/guides/parallel-agents-in-tmux/">
   <link rel="alternate" hreflang="ko" href="https://larcane97.github.io/clausona/ko/parallel-agents-in-tmux/">
+  <link rel="alternate" hreflang="x-default" href="https://larcane97.github.io/clausona/guides/parallel-agents-in-tmux/">
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="clausona">
   <meta property="og:locale" content="ko_KR">
@@ -28,7 +29,7 @@
     "@context": "https://schema.org",
     "@type": "TechArticle",
     "headline": "tmux에서 Claude Code와 Codex 에이전트를 계정별로 병렬 실행하기",
-    "description": "tmux 창마다 다른 계정이나 DeepSeek 같은 API 모델로 에이전트를 띄우고, Claude Code나 Codex 세션 하나가 작업을 나눠 맡긴 뒤 결과를 확인하게 하는 방법. GUI가 필요 없어서 SSH로 접속한 서버에서도 됩니다. tmux-fleet 플러그인을 설치하고 요청하면 됩니다.",
+    "description": "tmux 창마다 다른 계정이나 DeepSeek 같은 API 모델로 에이전트를 띄우고, Claude Code나 Codex 세션 하나가 작업을 나눠 맡긴 뒤 결과를 확인하게 하는 방법. GUI가 필요 없어서 SSH로 접속한 서버에서도 됩니다.",
     "datePublished": "2026-10-16",
     "dateModified": "2026-10-16",
     "inLanguage": "ko",
@@ -36,10 +37,10 @@
     "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
     "mainEntityOfPage": "https://larcane97.github.io/clausona/ko/parallel-agents-in-tmux/",
     "about": [
-      { "@type": "SoftwareApplication", "name": "tmux", "url": "https://github.com/tmux/tmux" },
-      { "@type": "SoftwareApplication", "name": "Claude Code", "alternateName": "클로드 코드" },
-      { "@type": "SoftwareApplication", "name": "Codex CLI" },
-      { "@type": "SoftwareApplication", "name": "clausona", "url": "https://github.com/larcane97/clausona" }
+      { "@type": "SoftwareApplication", "name": "tmux", "url": "https://github.com/tmux/tmux", "applicationCategory": "UtilitiesApplication", "operatingSystem": "macOS, Linux" },
+      { "@type": "SoftwareApplication", "name": "Claude Code", "alternateName": "클로드 코드", "applicationCategory": "DeveloperApplication", "operatingSystem": "macOS, Linux, Windows" },
+      { "@type": "SoftwareApplication", "name": "Codex CLI", "applicationCategory": "DeveloperApplication", "operatingSystem": "macOS, Linux, Windows" },
+      { "@type": "SoftwareApplication", "name": "clausona", "url": "https://github.com/larcane97/clausona", "applicationCategory": "DeveloperApplication", "operatingSystem": "macOS, Linux, Windows" }
     ]
   }
   </script>
