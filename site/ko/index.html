@@ -4,8 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Claude Code(클로드 코드)와 Codex 계정 여러 개를 동시에 쓰는 법: 스킬, hook, 대화 기록까지 공유 | clausona</title>
-  <meta name="description" content="회사 계정과 개인 계정을 한 컴퓨터에서 함께 쓰는 법. 로그인은 계정마다 따로 두고 스킬, hook, 플러그인, 설정은 공유하며, 원하면 대화 기록도 공유합니다. 동적 라우팅을 쓰면 실행할 때마다 clausona가 계정을 골라 줍니다. 직접 설정하는 법과 clausona로 하는 법을 함께 다룹니다.">
+  <meta name="description" content="회사 계정과 개인 계정을 한 컴퓨터에서 함께 쓰는 법. 로그인은 계정마다 따로 두고 스킬, hook, 플러그인, 설정은 공유하며, 원하면 대화 기록도 공유합니다. 동적 라우팅을 쓰면 실행할 때마다 clausona가 계정을 골라 줍니다.">
   <link rel="canonical" href="https://larcane97.github.io/clausona/ko/">
+  <link rel="alternate" hreflang="en" href="https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/">
+  <link rel="alternate" hreflang="ko" href="https://larcane97.github.io/clausona/ko/">
+  <link rel="alternate" hreflang="x-default" href="https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/">
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="clausona">
   <meta property="og:locale" content="ko_KR">
@@ -33,9 +36,19 @@
     "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
     "mainEntityOfPage": "https://larcane97.github.io/clausona/ko/",
     "about": [
-      { "@type": "SoftwareApplication", "name": "Claude Code", "alternateName": "클로드 코드" },
-      { "@type": "SoftwareApplication", "name": "Codex CLI" },
-      { "@type": "SoftwareApplication", "name": "clausona", "url": "https://github.com/larcane97/clausona" }
+      { "@type": "SoftwareApplication", "name": "Claude Code", "alternateName": "클로드 코드", "applicationCategory": "DeveloperApplication", "operatingSystem": "macOS, Linux, Windows" },
+      { "@type": "SoftwareApplication", "name": "Codex CLI", "applicationCategory": "DeveloperApplication", "operatingSystem": "macOS, Linux, Windows" },
+      { "@type": "SoftwareApplication", "name": "clausona", "url": "https://github.com/larcane97/clausona", "applicationCategory": "DeveloperApplication", "operatingSystem": "macOS, Linux, Windows" }
+    ]
+  }
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    "itemListElement": [
+      { "@type": "ListItem", "position": 1, "name": "clausona", "item": "https://larcane97.github.io/clausona/" },
+      { "@type": "ListItem", "position": 2, "name": "가이드", "item": "https://larcane97.github.io/clausona/ko/" }
     ]
   }
   </script>
