@@ -340,6 +340,73 @@ describe.skipIf(!hasTmux)("tmux-fleet helper", () => {
       expect(await json(["wait", "--name", "w1", "--timeout", "20"])).toMatchObject({ event: "bell" });
     });
 
+    /**
+     * A PATH on which tmux first answers `times` times that a pane stands in /elsewhere, as it does
+     * while the pane's process has not changed directory yet.
+     */
+    function panesSettlingAfter(times: number): string {
+      const late = path.join(dir, "late-bin");
+      const answered = path.join(dir, "answered");
+      mkdirSync(late);
+      writeFileSync(
+        path.join(late, "tmux"),
+        [
+          "#!/bin/sh",
+          'case "$*" in',
+          "  *pane_current_path*)",
+          `    count=$(cat "${answered}" 2>/dev/null || echo 0)`,
+          `    if [ "$count" -lt ${times} ]; then`,
+          `      echo $((count + 1)) > "${answered}"`,
+          "      echo /elsewhere",
+          "      exit 0",
+          "    fi",
+          "    ;;",
+          "esac",
+          `PATH="${env.PATH}" exec tmux "$@"`,
+          "",
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      return `${late}${path.delimiter}${env.PATH}`;
+    }
+
+    const startArgs = (wt: string) => [
+      "start",
+      "--name",
+      "w1",
+      "--label",
+      "w1",
+      "--worktree",
+      wt,
+      "--tool",
+      "claude",
+      "--",
+      "claude:work",
+    ];
+
+    it("waits for a new pane to reach the worktree, which it can do after tmux answers", async () => {
+      // tmux answers right after the fork, and the pane's process changes directory after that:
+      // later still on a systemd host, where it first asks for a cgroup scope of its own.
+      const wt = addWorktree("w1");
+
+      const r = await run(startArgs(wt), { PATH: panesSettlingAfter(3) });
+
+      expect(r.stderr).toBe("");
+      expect(r.code).toBe(0);
+      await argvOf("w1");
+    });
+
+    it("refuses a pane that stays in another folder, and closes it", async () => {
+      const wt = addWorktree("w1");
+      const windows = tmx("list-windows", "-F", "#{window_id}");
+
+      const r = await run(startArgs(wt), { PATH: panesSettlingAfter(1_000_000) });
+
+      expect(r.code).not.toBe(0);
+      expect(r.stderr).toContain(`tmux opened the pane in /elsewhere, not in ${wt}; nothing was started`);
+      expect(tmx("list-windows", "-F", "#{window_id}")).toBe(windows);
+    });
+
     it("refuses a folder inside a worktree, and a missing one, with a one-line error", async () => {
       const wt = addWorktree("w1");
       mkdirSync(path.join(wt, "sub"));
