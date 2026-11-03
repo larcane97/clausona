@@ -510,6 +510,88 @@ describe("collectQuotas: whose sign-in a reading was taken with", () => {
     expect(adapter.credentialAccount).not.toHaveBeenCalled();
     expect(result[TARGET.id]?.state).toBe("ok");
   });
+
+  describe("a cached other_account reading, against the account registered now", () => {
+    const verdict = (signedInAs: unknown) => ({ state: "other_account", fetchedAt: NOW - 60_000, signedInAs });
+    const seedVerdict = (signedInAs: unknown, cooldowns = {}) =>
+      seedCache({ version: 1, cooldowns, profiles: { [OWN.id]: verdict(signedInAs) } });
+
+    it("reads again one that names the registered account, and comes back with its numbers", async () => {
+      // The profile was re-added under the account the old reading named, within the five minutes.
+      seedVerdict("work@example.com");
+      const adapter = stubSignedInAs("work@example.com", "new-sign-in");
+
+      const result = await collectQuotas([OWN], { now: NOW, cachePath });
+
+      expect(adapter.fetchQuota).toHaveBeenCalledTimes(1);
+      expect(result[OWN.id]).toEqual({ ...reading, state: "ok", fetchedAt: NOW });
+      expect(readCacheFile().profiles[OWN.id]).toEqual(result[OWN.id]);
+    });
+
+    it("serves one that still names another account, with no fetch", async () => {
+      seedVerdict("other@example.com");
+      const adapter = stubSignedInAs("other@example.com");
+
+      const result = await collectQuotas([OWN], { now: NOW, cachePath });
+
+      expect(adapter.readCredential).not.toHaveBeenCalled();
+      expect(adapter.fetchQuota).not.toHaveBeenCalled();
+      expect(result[OWN.id]).toEqual(verdict("other@example.com"));
+    });
+
+    // The rule is isOtherAccount's: two emails compare without case, two ids exactly, and an email
+    // against an id is not reported.
+    it.each([
+      ["an email in another case", "work@example.com", "WORK@Example.COM", 1],
+      ["an id against an email", "work@example.com", "account-1", 1],
+      ["an id in another case", "Account-1", "account-1", 0],
+    ])("follows isOtherAccount for %s", async (_label, account, signedInAs, fetches) => {
+      seedVerdict(signedInAs);
+      const adapter = stubSignedInAs(signedInAs);
+
+      const result = await collectQuotas([{ ...TARGET, account }], { now: NOW, cachePath });
+
+      expect(adapter.fetchQuota).toHaveBeenCalledTimes(fetches);
+      expect(result[TARGET.id]?.state).toBe(fetches ? "ok" : "other_account");
+    });
+
+    it.each([
+      ["no registered account", undefined],
+      ["an empty registered account", ""],
+    ])("reads again one with %s to differ from, which a fresh reading would not check", async (_label, account) => {
+      seedVerdict("other@example.com");
+      const adapter = stubSignedInAs("other@example.com");
+
+      const result = await collectQuotas([{ ...TARGET, account }], { now: NOW, cachePath });
+
+      expect(adapter.fetchQuota).toHaveBeenCalledTimes(1);
+      expect(result[TARGET.id]?.state).toBe("ok");
+    });
+
+    // collectQuotas never rejects, and both files can be edited by hand.
+    it.each([
+      ["a reading that names nobody", OWN, undefined],
+      ["a reading that names a number", OWN, 42],
+      ["a registered account that is a number", { ...TARGET, account: 42 as unknown as string }, "other@example.com"],
+    ])("reads again rather than rejects on %s", async (_label, target, signedInAs) => {
+      seedVerdict(signedInAs);
+      const adapter = stubSignedInAs("work@example.com");
+
+      await expect(collectQuotas([target], { now: NOW, cachePath })).resolves.toBeDefined();
+
+      expect(adapter.fetchQuota).toHaveBeenCalledTimes(1);
+    });
+
+    it("says cooldown rather than the old verdict while the endpoint is paused", async () => {
+      seedVerdict("work@example.com", { claude: NOW + 60_000 });
+      const adapter = stubSignedInAs("work@example.com");
+
+      const result = await collectQuotas([OWN], { now: NOW, cachePath });
+
+      expect(adapter.fetchQuota).not.toHaveBeenCalled();
+      expect(result[OWN.id]).toEqual({ state: "cooldown", fetchedAt: NOW });
+    });
+  });
 });
 
 describe("forgetQuota", () => {

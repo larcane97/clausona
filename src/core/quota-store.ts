@@ -303,6 +303,22 @@ async function ownReading(
   return { snapshot: { state: "other_account", fetchedAt: snapshot.fetchedAt, signedInAs: account }, ...found };
 }
 
+/**
+ * Whether a cached `other_account` reading no longer holds. It was a verdict against the account
+ * registered when it was read, and the registration can change while it is still fresh: the
+ * profile removed and added again, its email edited by hand. Served then, a re-add that worked
+ * looks like one that failed, in red, beside the very account the reading names. One that still
+ * differs goes on being served, so a profile that stays wrong costs no extra fetch.
+ *
+ * Both values come from files that can be edited by hand, and a value that cannot be compared is
+ * read again rather than allowed to reject the whole listing.
+ */
+function verdictLapsed(snapshot: QuotaSnapshot, account: string | undefined): boolean {
+  if (snapshot.state !== "other_account") return false;
+  if (!account || typeof account !== "string" || typeof snapshot.signedInAs !== "string") return true;
+  return !isOtherAccount(account, snapshot.signedInAs);
+}
+
 async function fetchOne(
   target: QuotaTarget,
   cache: QuotaCache,
@@ -392,7 +408,8 @@ async function fetchOne(
  *
  * An API profile's target reads its spend instead (spend.ts), with `fetch` - the global one
  * unless given - and comes back with a `budget` window for the limit that applies. A cached
- * reading from before its budget's period began is read again.
+ * reading from before its budget's period began is read again, and so is an `other_account` one
+ * that no longer differs from the account registered.
  */
 export async function collectQuotas(
   targets: QuotaTarget[],
@@ -422,7 +439,8 @@ export async function collectQuotas(
     const outdated = (snapshot: QuotaSnapshot) =>
       options.refresh ||
       snapshot.fetchedAt < (options.refreshBefore ?? Number.NEGATIVE_INFINITY) ||
-      (budget !== undefined && snapshot.fetchedAt < Date.parse(periodStart(now, budget.per)));
+      (budget !== undefined && snapshot.fetchedAt < Date.parse(periodStart(now, budget.per))) ||
+      verdictLapsed(snapshot, target.account);
     if (cached && !outdated(cached) && isFresh(cached, now)) {
       const served = target.api ? withBudget(cached, target.api, now) : cached;
       if (served !== cached && !isDeepStrictEqual(served.budget, cached.budget)) {
@@ -487,8 +505,12 @@ export async function cachedQuotas(
 
 /**
  * Drops a profile's cached reading, so the next `list` or dashboard reads it again: after a
- * sign-in, the reading is of the one it replaced. Never throws; a cache that cannot be written
- * only serves the old reading until it goes stale.
+ * sign-in, the reading is of the one it replaced, and after a remove or an add, of whoever had the
+ * name before. Never throws; a cache that cannot be written only serves the old reading until it
+ * goes stale.
+ *
+ * `identities` stays. An entry answers only for the token it was found for, and a token's account
+ * does not change with who the profile is registered to.
  */
 export async function forgetQuota(id: string, options: { cachePath?: string } = {}): Promise<void> {
   const cachePath = options.cachePath ?? DEFAULT_CACHE_PATH;
