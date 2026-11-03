@@ -2295,6 +2295,15 @@ export async function initializeRegistry(options: {
     }
     return registry;
   });
+  // A name that now means something else - gone, new, or on another directory or account - must
+  // not go on showing the reading it had. One init found as it was keeps its reading: running init
+  // again is no reason to ask every usage endpoint over, and an API profile's reading holds what
+  // its budget counts from.
+  for (const id of new Set([...Object.keys(existing?.profiles ?? {}), ...Object.keys(saved.profiles)])) {
+    const before = existing?.profiles[id];
+    const after = saved.profiles[id];
+    if (before?.configDir !== after?.configDir || before?.email !== after?.email) await forgetQuota(id);
+  }
   // A directory init found can be an interrupted add's, holding the account it signed in
   // to. Registered, it is that profile's, as a --from import makes it.
   for (const { account } of planned) {
@@ -3669,7 +3678,12 @@ async function registerProfile(
     return current;
   });
   // The update writes nothing only when it found the id taken, and it said so above.
-  return saved ? { saved } : { taken: taken as ProfileTaken };
+  if (!saved) return { taken: taken as ProfileTaken };
+  // Whatever the cache still holds under this name is of whoever had it before: left by an entry
+  // removed by hand, or written back by a read that was under way during the remove. Its numbers
+  // would sit beside the new registration for up to five minutes.
+  await forgetQuota(id);
+  return { saved };
 }
 
 /**
@@ -4537,6 +4551,9 @@ export async function removeProfile(id: string) {
     if (remaining.length === 0) delete primarySources[profile.tool];
     return { ...current, profiles, activeProfiles, primarySources };
   });
+  // After the entry goes: a removal that stops before then leaves a profile whose reading is
+  // still its own.
+  await forgetQuota(id);
 }
 
 /**
