@@ -13,7 +13,8 @@ codex:work          you@example.com              —          12% 5d
 ```
 
 `5H` is the rolling session window, `7D` the weekly one, each followed by how long
-until it resets. The dashboard shows the same reading with a gauge and the precise
+until it resets. A plan without a 5-hour limit, such as a verified Claude Ultra plan or some
+Codex plans, shows a dash under `5H`. The dashboard shows the same reading with a gauge and the precise
 reset time, plus the most-consumed per-model limit.
 
 The table adapts to the terminal: as it narrows, token counts give way first, then
@@ -95,7 +96,8 @@ or `auth.json` names. `clausona login <profile>` drops the reading, so the next 
 the new sign-in rather than waiting out the cache.
 
 Any other reading that could not be taken keeps the numbers it already has, dimmed, and the
-reason is printed below the table. A dash means there is no reading yet.
+reason is printed below the table. A dash means there is no reading yet, or, under `5H` beside a `7D` reading, that the plan has no
+5-hour limit.
 
 | State | Meaning |
 | --- | --- |

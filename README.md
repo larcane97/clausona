@@ -1,6 +1,6 @@
 # clausona
 
-**Switch between multiple Claude Code and OpenAI Codex CLI accounts on one machine. They sign in separately and share one setup. clausona can also pick the account with quota left for each run, and show the skills, MCP servers and hooks every account loads.**
+**Switch between Claude Code and OpenAI Codex CLI accounts without logging out while keeping the same conversation. Each account stays signed in separately and shares a single setup. Dynamic routing optimizes usage across your accounts by starting each run on one with room, and clausona shows which skills, MCP servers and hooks each account loads. Under the hood, it's just a shell hook and symlinks, with no daemon or proxy.**
 
 <p align="center">
   <a href="https://github.com/hesreallyhim/awesome-claude-code"><img src="https://img.shields.io/badge/Mentioned%20in-Awesome%20Claude%20Code-fc60a8?style=for-the-badge&logo=awesomelists&logoColor=white" alt="Mentioned in Awesome Claude Code" /></a>
@@ -24,7 +24,7 @@ config directory for its sign-in. Skills, hooks, plugins and settings are shared
 Conversation history stays with the account unless you choose to share it. Once it's shared, a
 conversation started under one account can be resumed under another.
 
-clausona also shows how much of your accounts' 5-hour and weekly plan limits is left, side by side.
+clausona also shows how much of each account's weekly plan limit remains side by side, along with the remaining 5-hour limit on plans that have one.
 
 Step-by-step guides, including how to do it by hand:
 [multiple Claude Code accounts](https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/),
@@ -59,7 +59,7 @@ You don't sign in again, and you don't reinstall plugins.
 - **One-command switching** — `clausona use <name>` and you're on a different account
 - **Shared environment** — plugins (and the MCP servers they bring), skills, and settings.json with its hooks and permissions (Claude), and config.toml (MCP servers included), skills, and hooks (Codex) are symlinked across profiles within each tool. Set up once, use everywhere. MCP servers added with `claude mcp add` stay per account — [see the FAQ](#do-my-mcp-servers-plugins-and-settings-carry-over-when-i-switch).
 - **Shared history, if you want** — `clausona config <profile> --merge-sessions` shares conversation history with your primary directory, so `claude --resume` and `claude --continue` (and `codex resume` on macOS and Linux) find conversations from every account that shares it
-- **Plan quota at a glance** — session and weekly limit usage for every account, read live from each tool's own usage endpoint (Claude and Codex)
+- **Plan quota at a glance** — weekly limit usage for every account, and the 5-hour session limit on plans that have one, read live from each tool's own usage endpoint (Claude and Codex)
 - **Routing** — `clausona run --route main` starts on whichever account still has room, going by the same plan-quota readings. With a directory rule or a default route, a plain `clausona run claude` (or `codex`) picks the account on its own ([docs](docs/routing.md))
 - **Extensions** — the skills, MCP servers and hooks Claude Code and Codex load in a project, for every account, on the dashboard's Extensions screen or from `clausona skills`, `clausona mcp` and `clausona hooks`. Turn one off or delete it, behind a backup, and `undo` puts it back ([docs](docs/extensions.md))
 - **Two accounts at once** — `clausona run claude:personal` starts one session under another profile without switching, so two terminals can run two accounts side by side
@@ -145,7 +145,8 @@ codex:work          you@example.com              —          12% 5d
 ```
 
 `5H` is the rolling session window, `7D` the weekly one, each followed by how long
-until it resets. The dashboard shows the same reading with a gauge and the precise
+until it resets. A plan without a 5-hour limit, such as a verified Claude Ultra plan or some
+Codex plans, shows a dash under `5H`. The dashboard shows the same reading with a gauge and the precise
 reset time, plus the most-consumed per-model limit.
 
 Readings come from each tool's own usage endpoint, authenticated with the credential that
@@ -391,6 +392,8 @@ look at, and where clausona stores its data: **[docs/how-it-works.md](docs/how-i
 Compared from each project's README and docs in September 2026; — means we found no mention of
 it. Corrections are welcome.
 
+See the [guides site](https://larcane97.github.io/clausona/guides/claude-code-account-switchers/) for a fuller comparison covering ccam, ClaudeCodeMultiAccounts, ccswitch and Orca.
+
 clausona is built around one idea: keep accounts apart where they have to be — sign-in and
 history — and shared everywhere else, for Claude Code and Codex alike.
 
@@ -434,8 +437,8 @@ from another account is resumed by its id. `--separate-sessions` turns sharing o
 
 ### Can I see Claude and Codex plan limits for all my accounts at once?
 
-Yes. `clausona list` and the dashboard show every account's 5-hour and 7-day usage and the
-time until each resets, read from each tool's own usage endpoint with the credential that tool
+Yes. `clausona list` and the dashboard show every account's 7-day usage, and its 5-hour usage on
+plans that have one, with the time until each resets, read from each tool's own usage endpoint with the credential that tool
 already stored. Accounts you have not used today still report, because clausona renews a lapsed
 access token when it needs to.
 

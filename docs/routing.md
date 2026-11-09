@@ -35,7 +35,8 @@ once it has a spend limit: see [API profiles in routes](#api-profiles-in-routes)
 ## How an account is picked
 
 Each account gets one number, its usage: the higher of its 5-hour and 7-day windows. An account
-at 0% of its 5-hour window and 99% of its week has a usage of 99%. Every rule below looks at that
+at 0% of its 5-hour window and 99% of its week has a usage of 99%. A plan with no 5-hour limit,
+such as a verified Claude Ultra plan, is judged on its week alone. Every rule below looks at that
 number and nothing else. A run's note gives it, as in `34% of 7D used`, and so does
 `clausona route explain --json`, as `usage`. An API profile's usage is its spend as a share of
 its limit, and goes through the same stages.
@@ -108,7 +109,7 @@ over the cut, so an Opus run goes to another account. A run that names no model 
 take `claude:team`. When the model's limit is the highest of an account's windows, the note
 says so, as in `62% of the Opus limit used`.
 
-A Codex limit on a model can have two windows, like the account's own: 5 hours and a week.
+A Codex limit on a model can have two windows: 5 hours and a week.
 Either can run out first, so the higher of the two counts, as with the account's 5H and 7D. The
 note names the window, as in `62% of the GPT-5.3-Codex-Spark 7D limit used`, and so does the
 model's column in `route explain` and on the Routes screen. Claude's model limits are all weekly
@@ -1183,7 +1184,7 @@ Each entry in `members`:
 | `status` | `"picked"`, `"eligible"` (under the cut, not picked), `"over-limit"` (at or above `maxUsage`, not picked) or `"skipped"` |
 | `skipReason` | null, or one of `"signed-out"`, `"expired"`, `"other-account"` (its stored sign-in is another account's), `"no-reading"`, `"not-registered"`, `"keeps-own-sessions"` (a resumed run), and for an API profile `"no-spend-limit"`, `"spend-not-reported"` or `"spend-unread"` |
 | `usage` | `{ "percent", "window", "stale" }` with `window` `"5H"`, `"7D"`, the name of the limit on the model (`"Opus"`, `"GPT-5.3-Codex-Spark 7D"`) when that is the highest, or `"budget"` for an API profile, or null |
-| `fiveHour`, `sevenDay` | `{ "usedPercent", "resetsAt" }` with `resetsAt` an ISO time or null, or null |
+| `fiveHour`, `sevenDay` | `{ "usedPercent", "resetsAt" }` with `resetsAt` an ISO time or null, or null (`fiveHour` is null on a plan with no 5-hour limit, too) |
 | `scoped` | The account's limit on the model `--model` named, as `{ "label", "usedPercent", "resetsAt" }` (of a Codex limit with two windows, the higher), or null without `--model` or such a limit |
 | `budget` | An API profile's spend against its limit, as `{ "usedPercent", "resetsAt", "spentUsd", "limitUsd", "source", "per" }`, or null. `source` is `"budget"` (a clausona budget) or `"provider"` (the key's own limit); `per` is `"day"`, `"week"`, `"month"` or null |
 | `lastPickedAt` | The ISO time of the last pick, or null |

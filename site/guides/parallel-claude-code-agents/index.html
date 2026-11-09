@@ -37,7 +37,7 @@
     "mainEntityOfPage": "https://larcane97.github.io/clausona/guides/parallel-claude-code-agents/",
     "about": [
       { "@type": "SoftwareApplication", "name": "Claude Code", "applicationCategory": "DeveloperApplication", "operatingSystem": "macOS, Linux, Windows" },
-      { "@type": "SoftwareApplication", "name": "Superset", "url": "https://superset.sh", "applicationCategory": "DeveloperApplication", "operatingSystem": "macOS, Linux" },
+      { "@type": "SoftwareApplication", "name": "Paradev", "alternateName": "Superset", "url": "https://paradev.com", "applicationCategory": "DeveloperApplication", "operatingSystem": "macOS, Linux" },
       { "@type": "SoftwareApplication", "name": "herdr", "url": "https://github.com/herdrdev/herdr", "applicationCategory": "DeveloperApplication", "operatingSystem": "macOS, Linux, Windows" },
       { "@type": "SoftwareApplication", "name": "Orca", "url": "https://github.com/stablyai/orca", "applicationCategory": "DeveloperApplication", "operatingSystem": "macOS, Linux, Windows" },
       { "@type": "SoftwareApplication", "name": "tmux", "url": "https://github.com/tmux/tmux", "applicationCategory": "UtilitiesApplication", "operatingSystem": "macOS, Linux" },
@@ -150,7 +150,7 @@ claude plugin install superset-fleet@clausona   # or herdr-fleet, orca-fleet, tm
       <ul>
         <li>A subagent runs inside its parent session. You see what it returns, not what it's doing, so a wrong turn shows up only at the end.</li>
         <li>You can't type into a single subagent to correct it or answer it. Stopping one usually means interrupting the session that runs all of them.</li>
-        <li>Subagents run on the account of the session that started them. Five at once use up that account's 5-hour window five times as fast. None of them can run on another account, or on a model from another provider.</li>
+        <li>Subagents always run on the account of the session that started them. Five running at once burn through that account's limits five times as fast. None of them can use another account or a model from a different provider.</li>
       </ul>
       <p>Separate sessions don't have these problems. You can read along or answer a question, and you can stop one agent without touching the others.</p>
 
@@ -181,7 +181,7 @@ claude plugin install superset-fleet@clausona   # or herdr-fleet, orca-fleet, tm
       <p><a href="https://github.com/herdrdev/herdr">herdr</a> is a terminal runtime that keeps agent panes running and shows their state. Open a pane and run <code>clausona run claude:work</code> in it. The <code>herdr-fleet</code> plugin adds a coordinator there: see <a href="../parallel-agents-in-herdr/">parallel agents in herdr</a>.</p>
       <p><a href="https://github.com/stablyai/orca">Orca</a> is an open-source desktop app that runs coding agents side by side in separate git worktrees. It works with any CLI agent. In an Orca terminal, <code>clausona run claude:work</code> starts Claude Code on that account.</p>
       <p>Orca also has its own Claude and Codex account switcher. The <code>orca-fleet</code> plugin adds a coordinator there: see <a href="../parallel-agents-in-orca/">parallel agents in Orca</a>.</p>
-      <p>In <a href="https://superset.sh">Superset</a>, add a custom agent whose command is the full path that <code>command -v clausona</code> prints. Its arguments start with <code>run claude:work --</code>, and <a href="#setup">the setup steps</a> have the full line.</p>
+      <p>In <a href="https://paradev.com">Paradev</a> (formerly Superset), add a custom agent whose command is the full path that <code>command -v clausona</code> prints. Its arguments start with <code>run claude:work --</code>, and <a href="#setup">the setup steps</a> have the full line.</p>
       <p>In Superset, the <code>superset-fleet</code> plugin adds the coordinator. The next section shows how it works there.</p>
 
       <h2 id="how">How the Superset fleet works</h2>
@@ -222,7 +222,7 @@ claude plugin install superset-fleet@clausona   # or herdr-fleet, orca-fleet, tm
       <ul>
         <li><strong><code>workers</code></strong> lists the only profiles that may be workers.</li>
         <li><strong><code>routing</code></strong> holds your own rules, in plain words. The orchestrator applies them when it fills in the plan.</li>
-        <li><strong><code>maxUsage</code></strong> skips a subscription profile once its 5-hour or weekly usage reaches that percentage. The default is 90.</li>
+        <li><strong><code>maxUsage</code></strong> skips a subscription profile as soon as its weekly usage, or its 5-hour usage on plans that have one, reaches that percentage. The default is 90.</li>
         <li><strong><code>retire</code></strong> is <code>ask</code> (the default) or <code>auto</code>.</li>
         <li><strong><code>permissions</code></strong> sets how workers run, per tool, such as <code>{"claude": "acceptEdits", "codex": "on-request"}</code>. In Codex's default sandbox a Codex worker asks before each commit and push. Add <code>"codexSandbox": "danger-full-access"</code> to it if you want Codex workers to do that on their own. That turns Codex's sandbox off for workers.</li>
       </ul>
