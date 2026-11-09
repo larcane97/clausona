@@ -107,4 +107,14 @@ describe("the npm package", () => {
     expect(stderr).toContain("notes.txt");
     expect(readFileSync(path.join(out, "notes.txt"), "utf8")).toBe("keep me\n");
   });
+
+  it("will not write over the bundle it was given", () => {
+    const source = bundle(`v${version}`);
+
+    const { status, stderr } = pack(source, dir);
+
+    expect(status).toBe(1);
+    expect(stderr).toContain("holds the bundle itself");
+    expect(readFileSync(source, "utf8")).toContain(`clausona v${version}`);
+  });
 });

@@ -111,6 +111,8 @@ const manifest = {
 // Written afresh each time, so a file left from an earlier run cannot be published by mistake. Only
 // a directory this script wrote is emptied: a mistyped --out must not delete someone's files.
 const written = ["LICENSE", "README.md", "clausona.js", "package.json"];
+const inside = path.relative(out, bundle);
+if (!inside.startsWith("..") && !path.isAbsolute(inside)) fail(`--out ${out} holds the bundle itself. Pick another.`);
 if (existsSync(out)) {
   const strays = readdirSync(out).filter((entry) => !written.includes(entry));
   if (strays.length > 0) {
