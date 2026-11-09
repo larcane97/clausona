@@ -9,13 +9,16 @@ already spent, so you can pick a profile that still has headroom.
 PROFILE             ACCOUNT                      5H         7D
 claude:work         you@example.com              6% 23m     46% 13h
 claude:personal     you@personal.com             0%         100% 4d
-codex:work          you@example.com              —          12% 5d
+codex:work          you@example.com              none       12% 5d
 ```
 
 `5H` is the rolling session window, `7D` the weekly one, each followed by how long
 until it resets. A plan without a 5-hour limit, such as a verified Claude Ultra plan or some
-Codex plans, shows a dash under `5H`. The dashboard shows the same reading with a gauge and the precise
-reset time, plus the most-consumed per-model limit.
+Codex plans, shows `none` under `5H`, and when no account has a 5-hour limit the column is left
+out. The dashboard shows the same reading with a gauge and the precise
+reset time, plus the most-consumed per-model limit. In `--json`, each profile's
+`quota.sessionLimit` is `true` when its plan has a 5-hour limit, `false` when it has none, and
+`null` when no reading says (an API profile, or a reading an older clausona took).
 
 The table adapts to the terminal: as it narrows, token counts give way first, then
 cost, then the reset times — the quota columns and the profile name are the last things
@@ -96,8 +99,9 @@ or `auth.json` names. `clausona login <profile>` drops the reading, so the next 
 the new sign-in rather than waiting out the cache.
 
 Any other reading that could not be taken keeps the numbers it already has, dimmed, and the
-reason is printed below the table. A dash means there is no reading yet, or, under `5H` beside a `7D` reading, that the plan has no
-5-hour limit.
+reason is printed below the table. A dash means there is no reading yet; `none` under `5H`
+means the plan has no 5-hour limit. A window whose reset has passed is not kept, since its period
+is over.
 
 | State | Meaning |
 | --- | --- |

@@ -105,13 +105,41 @@ function scopedWindows(limits: ScopedWindow[]): Pick<QuotaWindows, "scoped" | "s
   return limits.length ? { scoped: mostUsedWindow(limits), scopedLimits: limits } : {};
 }
 
-/** Parses `GET https://api.anthropic.com/api/oauth/usage`. */
+/**
+ * What `limits[]` says of the 5-hour window. It lists one entry per limit the account has, and the
+ * 5-hour one is `kind: "session"`, carrying `percent` and `resets_at`: the list without one is an
+ * account with no 5-hour limit (a verified Ultra plan, whose `five_hour` is null). No list, or one
+ * with no entry of a kind at all, says nothing. `reading` is the session entry's, when it has one.
+ */
+function claudeSessionLimit(value: unknown): { has: boolean; reading?: QuotaWindow } | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const entries = value.map(record).filter((entry) => typeof entry?.kind === "string");
+  if (entries.length === 0) return undefined;
+  const session = entries.find((entry) => entry?.kind === "session");
+  if (!session) return { has: false };
+  const usedPercent = toPercent(session.percent);
+  return {
+    has: true,
+    ...(usedPercent === null ? {} : { reading: { usedPercent, resetsAt: toIso(session.resets_at) } }),
+  };
+}
+
+/**
+ * Parses `GET https://api.anthropic.com/api/oauth/usage`. `five_hour` is the 5-hour reading, and
+ * `limits[]` says whether the account has that limit at all (claudeSessionLimit): when `five_hour`
+ * is null on an account that has it, the session entry is read instead.
+ */
 export function parseClaudeQuota(raw: unknown): QuotaWindows | null {
   const obj = record(raw);
   if (!obj) return null;
 
+  const limit = claudeSessionLimit(obj.limits);
+  const session = claudeWindow(obj.five_hour) ?? limit?.reading;
+  // A reading is a window the account has, whatever the list says.
+  const sessionLimit = session ? true : limit?.has;
   const windows: QuotaWindows = {
-    session: claudeWindow(obj.five_hour),
+    session,
+    ...(sessionLimit === undefined ? {} : { sessionLimit }),
     weekly: claudeWindow(obj.seven_day),
     ...scopedWindows(claudeScopedLimits(obj.limits)),
   };
@@ -158,6 +186,14 @@ export function parseCodexQuota(raw: unknown): QuotaWindows | null {
     } else {
       windows.weekly = parsed.window;
     }
+  }
+  // A plan with a short window has it as primary and the weekly one as secondary. One with only a
+  // weekly limit has that as primary and says secondary is null: it has no short window. Anything
+  // else - no secondary key, both null - says nothing either way.
+  if (windows.session) {
+    windows.sessionLimit = true;
+  } else if (windows.weekly && rateLimit?.secondary_window === null) {
+    windows.sessionLimit = false;
   }
 
   // Each limit on one model (`GPT-5.3-Codex-Spark`), labelled by its name. It has the same two

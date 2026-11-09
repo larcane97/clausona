@@ -2,11 +2,13 @@ import { Box, Text } from "ink";
 
 import type { Route } from "../../core/route-config.js";
 import { isUnread, type Ranking, type Row, scopedWindowKind, scopedWindowName } from "../../core/routing.js";
-import { fitQuotaValue } from "../../lib/format.js";
+import { fitQuotaValue, NO_SESSION } from "../../lib/format.js";
 import {
   detailOrder,
+  hasFiveHour,
   modelHeader,
   modelWord,
+  noFiveHour,
   overLimitText,
   skipReason,
   spendText,
@@ -244,6 +246,7 @@ type ModelColumn = { width: number; kinds: boolean };
 function MemberLine({
   line,
   idWidth,
+  fiveHour,
   quota,
   cut,
   model,
@@ -251,6 +254,8 @@ function MemberLine({
 }: {
   line: Line;
   idWidth: number;
+  /** Whether the table has a 5H column: once a member has a 5-hour window. */
+  fiveHour: boolean;
   quota: number;
   cut: number;
   model?: ModelColumn;
@@ -259,7 +264,8 @@ function MemberLine({
 }) {
   const { row } = line;
   const scoped = row?.scoped;
-  // The window that sets the member's usage is bold, as in `csn route explain`.
+  // The window that sets the member's usage is bold, as in `csn route explain`. A plan with no
+  // 5-hour limit says `none` under 5H.
   const cell = (window: QuotaWindow | undefined, which: "5H" | "7D" | "budget") => (
     <Box marginLeft={GAP} width={which === "budget" ? budget : quota} flexShrink={0}>
       <QuotaCell
@@ -268,6 +274,7 @@ function MemberLine({
         width={which === "budget" ? (budget ?? quota) : quota}
         bold={row?.usage?.window === which}
         cut={cut}
+        none={which === "5H" && row !== undefined && noFiveHour(row)}
       />
     </Box>
   );
@@ -282,7 +289,7 @@ function MemberLine({
           {line.fallback ? <Text color={color.muted}> (fallback)</Text> : null}
         </Text>
       </Box>
-      {row ? cell(row.fiveHour, "5H") : null}
+      {row && fiveHour ? cell(row.fiveHour, "5H") : null}
       {row ? cell(row.sevenDay, "7D") : null}
       {row && model ? (
         <Box marginLeft={GAP} width={model.width} flexShrink={0}>
@@ -314,6 +321,10 @@ const BUDGET = "BUDGET";
 /** A member table's lines, and what sets the widths of its columns but for the quota cells. */
 type Table = {
   lines: Line[];
+  /** Whether it has a 5H column: once a member has a 5-hour window, or while the quota loads. */
+  fiveHour: boolean;
+  /** Whether a 5H cell says `none`, which its column must have room for. */
+  none: boolean;
   /** Every window a quota cell shows. */
   windows: QuotaWindow[];
   /** The model column's header; none when no account reports a limit on the model. */
@@ -358,8 +369,11 @@ function tableOf(ranking: Ranking, pending: boolean): Table {
   // The limit on the model the route is ranked as, named as explain names it; none when no
   // account reports one.
   const header = modelHeader(ranked);
+  const fiveHour = pending || ranking.rows.some(hasFiveHour);
   return {
     lines,
+    fiveHour,
+    none: fiveHour && ranked.some(noFiveHour),
     windows: ranked.flatMap((row) =>
       [row.fiveHour, row.sevenDay, row.scoped, row.budget].filter(
         (window): window is QuotaWindow => window !== undefined,
@@ -384,15 +398,19 @@ const budgetWidth = (quota: number) => Math.max(quota, BUDGET.length);
 /** A line's width but for its id: the mark, the quota cells and the status, each after a gap. */
 const around = (table: Table, quota: number, whole: boolean) =>
   MARK +
-  2 * (GAP + quota) +
+  (table.fiveHour ? 2 : 1) * (GAP + quota) +
   (table.header ? GAP + modelWidth(table, quota, whole) : 0) +
   (table.hasBudget ? GAP + budgetWidth(quota) : 0) +
   (table.status ? GAP + table.status : 0);
 
+/** A table's quota column at `at`: as quotaColumn has it, and room for `none` where a 5H cell says it. */
+const quotaWidth = (table: Table, at: number) =>
+  Math.max(quotaColumn(table.windows, at, table.cut), table.none ? NO_SESSION.length : 0);
+
 /** The first of `layouts` whose cells fit beside whole ids at `width`, with its quota column's width. */
 function firstFit(table: Table, width: number, layouts: typeof LAYOUTS) {
   return layouts
-    .map(({ at, whole }) => ({ at, quota: quotaColumn(table.windows, at, table.cut), whole }))
+    .map(({ at, whole }) => ({ at, quota: quotaWidth(table, at), whole }))
     .find(({ quota, whole }) => around(table, quota, whole) + table.longest <= width);
 }
 
@@ -421,7 +439,7 @@ function MemberTable({
   room: number;
 }) {
   const table = tableOf(ranking, pending);
-  const { lines, header, kinds, hasBudget, cut } = table;
+  const { lines, header, kinds, hasBudget, cut, fiveHour } = table;
   const shown = listWindow(lines.length + ranking.excluded.length, room, null, 0);
   const at = Math.min(
     ...[table, ...views.map((view) => tableOf(view, pending))].map(
@@ -433,7 +451,7 @@ function MemberTable({
     width,
     LAYOUTS.filter((layout) => layout.at === at),
   );
-  const { quota, whole } = fitting ?? { quota: quotaColumn(table.windows, at, cut), whole: false };
+  const { quota, whole } = fitting ?? { quota: quotaWidth(table, at), whole: false };
   const idWidth =
     fitting === undefined ? Math.max("ACCOUNT".length, width - around(table, quota, whole)) : table.longest;
   const model = header ? { width: modelWidth(table, quota, whole), kinds } : undefined;
@@ -445,9 +463,11 @@ function MemberTable({
           <Box width={MARK + idWidth} flexShrink={0}>
             <Text color={color.muted}>{" ".repeat(MARK)}ACCOUNT</Text>
           </Box>
-          <Box marginLeft={GAP} width={quota} flexShrink={0}>
-            <Text color={color.muted}>5H</Text>
-          </Box>
+          {fiveHour ? (
+            <Box marginLeft={GAP} width={quota} flexShrink={0}>
+              <Text color={color.muted}>5H</Text>
+            </Box>
+          ) : null}
           <Box marginLeft={GAP} width={quota} flexShrink={0}>
             <Text color={color.muted}>7D</Text>
           </Box>
@@ -470,6 +490,7 @@ function MemberTable({
           key={line.key}
           line={line}
           idWidth={idWidth}
+          fiveHour={fiveHour}
           quota={quota}
           cut={cut}
           {...(model ? { model } : {})}

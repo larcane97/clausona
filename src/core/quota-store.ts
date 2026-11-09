@@ -6,11 +6,11 @@ import { isDeepStrictEqual } from "node:util";
 
 import { getAdapter } from "../tools/registry.js";
 import type { ToolCredential } from "../tools/types.js";
-import type { QuotaSnapshot, QuotaWindows, ToolName } from "../types.js";
+import type { QuotaSnapshot, QuotaWindow, QuotaWindows, ToolName } from "../types.js";
 import { isOtherAccount } from "./account.js";
 import { checkBaseUrl } from "./api-url.js";
 import { acquireFileLock } from "./file-lock.js";
-import { cooldownUntil, isFresh, QUOTA_TIMEOUT_MS, QuotaHttpError } from "./quota.js";
+import { cooldownUntil, isFresh, mostUsedWindow, QUOTA_TIMEOUT_MS, QuotaHttpError } from "./quota.js";
 import type { Budget } from "./route-budgets.js";
 import { budgetWindow, periodStart, readSpend, type SpendEndpoint, withBaselines } from "./spend.js";
 
@@ -73,27 +73,43 @@ async function writeCache(cachePath: string, cache: QuotaCache): Promise<void> {
   }
 }
 
-function windowsOf(snapshot: QuotaSnapshot): QuotaWindows {
+/** Whether a window still applies at `now`: one whose reset has passed is of a period that is over. */
+const stillApplies = (window: QuotaWindow, now: number) =>
+  window.resetsAt === null || !(Date.parse(window.resetsAt) <= now);
+
+/**
+ * The windows of a reading that still apply at `now`, and whether the plan has a 5-hour limit,
+ * which no reset changes. A window past its reset is dropped: kept, a failed read drew it as
+ * `61% now`, the use of a window that has since started again.
+ */
+function windowsOf(snapshot: QuotaSnapshot, now: number): QuotaWindows {
+  const current = <W extends QuotaWindow>(window: W | undefined) =>
+    window && stillApplies(window, now) ? window : undefined;
+  const scopedLimits = snapshot.scopedLimits?.filter((window) => stillApplies(window, now));
   return {
-    session: snapshot.session,
-    weekly: snapshot.weekly,
-    scoped: snapshot.scoped,
-    ...(snapshot.scopedLimits ? { scopedLimits: snapshot.scopedLimits } : {}),
+    session: current(snapshot.session),
+    ...(snapshot.sessionLimit === undefined ? {} : { sessionLimit: snapshot.sessionLimit }),
+    weekly: current(snapshot.weekly),
+    // Of the model limits left, the most used, as quota.ts picks it; a reading an older clausona
+    // cached has only that one.
+    scoped: scopedLimits ? mostUsedWindow(scopedLimits) : current(snapshot.scoped),
+    ...(scopedLimits?.length ? { scopedLimits } : {}),
   };
 }
 
-function hasWindows(snapshot: QuotaSnapshot | undefined): snapshot is QuotaSnapshot {
-  return Boolean(snapshot && (snapshot.session ?? snapshot.weekly ?? snapshot.scoped));
-}
+const hasWindows = (windows: QuotaWindows) => Boolean(windows.session ?? windows.weekly ?? windows.scoped);
 
 /**
- * Reports a failure without throwing away what was last known. The numbers stay
- * attached (stamped with when they were true) so the UI can dim them rather than
- * blanking the row, while `state` explains why they were not refreshed.
+ * Reports a failure without throwing away what was last known. The numbers that still apply stay
+ * attached (stamped with when they were true) so the UI can dim them rather than blanking the
+ * row, while `state` explains why they were not refreshed. With none left, whether the plan has a
+ * 5-hour limit is still known.
  */
 function degraded(state: QuotaSnapshot["state"], cached: QuotaSnapshot | undefined, now: number): QuotaSnapshot {
-  if (hasWindows(cached)) return { ...windowsOf(cached), state, fetchedAt: cached.fetchedAt };
-  return { state, fetchedAt: now };
+  const kept = cached && windowsOf(cached, now);
+  if (cached && kept && hasWindows(kept)) return { ...kept, state, fetchedAt: cached.fetchedAt };
+  const sessionLimit = cached?.sessionLimit;
+  return { state, fetchedAt: now, ...(sessionLimit === undefined ? {} : { sessionLimit }) };
 }
 
 /**

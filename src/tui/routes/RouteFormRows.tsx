@@ -2,6 +2,7 @@ import { Box, Text } from "ink";
 import { type PropsWithChildren, useRef } from "react";
 
 import { type Ranking, spendUsageOf, usageOf } from "../../core/routing.js";
+import { noSessionLimit } from "../../lib/format.js";
 import { freeNow, nothingRead, skipReason, spendText } from "../../lib/route-render.js";
 import type { QuotaSnapshot } from "../../types.js";
 import { QuotaCell } from "../components/QuotaCell.js";
@@ -22,6 +23,12 @@ const CURSOR = 2;
 const LABEL = 11;
 /** A quota cell's percentage, as the spec's form shows it: no gauge, no reset. */
 const QUOTA = 4;
+
+/**
+ * The lines the accounts want: one each, and the header over them that names their quota columns.
+ * The header is the first line they give up, once only the cursor's row is left.
+ */
+export const accountRowLines = (count: number) => (count > 0 ? count + 1 : 0);
 
 /** How an error names its field below the box. */
 const FIELD_LABEL: Record<FormField, string> = {
@@ -215,10 +222,11 @@ function MoreLine({ arrow, count }: { arrow: "↑" | "↓"; count: number }) {
 }
 
 /**
- * Row 0, every account, then one row per account with its quota; out of the route reads
- * `excluded`, and an account with no quota says why. `lines` is the most lines the accounts may
- * take, their counts above and below included: the rest scroll with the cursor, and row 0 stays.
- * `cut` is the limit the form holds: a reading under it never reads as it.
+ * Row 0, every account, then the quota columns' header and one row per account with its quota;
+ * out of the route reads `excluded`, and an account with no quota says why. `lines` is the most
+ * lines the accounts may take, the header and their counts above and below included: the rest
+ * scroll with the cursor, and row 0 stays. With one line, the cursor's row is all there is. `cut`
+ * is the limit the form holds: a reading under it never reads as it.
  *
  * Each row is a Line of its own, row 0's carrying the field's label (`line`): every row's box
  * starts where the other fields' values do, its `▸` (`rowMark`) in the label column.
@@ -250,10 +258,11 @@ export function AccountRows({
   const cursor = focused && state.cursor > 0 ? state.cursor - 1 : null;
   // A list shows its cursor's row however little room it has. With none for the accounts, which
   // the form gives them only while no cursor on them can move, they are left out.
+  const header = listed.length > 0 && lines > 1;
   const view =
     lines < 1
       ? { start: began.current, end: began.current, above: 0, below: 0 }
-      : listWindow(listed.length, lines, cursor, began.current);
+      : listWindow(listed.length, header ? lines - 1 : lines, cursor, began.current);
   began.current = view.start;
   return (
     <>
@@ -262,6 +271,17 @@ export function AccountRows({
           {`[${state.every ? "x" : " "}] every account (*), new ones join`}
         </Text>
       </Line>
+      {header ? (
+        <Line label="">
+          <Box width={4 + idWidth} flexShrink={1} minWidth={0} />
+          <Box marginLeft={GAP} width={QUOTA} flexShrink={0} justifyContent="flex-end">
+            <Text color={color.muted}>5H</Text>
+          </Box>
+          <Box marginLeft={GAP} width={QUOTA} flexShrink={0} justifyContent="flex-end">
+            <Text color={color.muted}>7D</Text>
+          </Box>
+        </Line>
+      ) : null}
       {view.above > 0 ? <MoreLine arrow="↑" count={view.above} /> : null}
       {listed.slice(view.start, view.end).map((account, at) => {
         const index = view.start + at;
@@ -280,12 +300,18 @@ export function AccountRows({
             </Box>
             {/* Right-aligned: a percentage comes padded to the width, a dash does not. An API
                 profile, billed per use, says so where the 5H column is, and its budget's use where
-                the 7D one is. */}
+                the 7D one is. A plan with no 5-hour limit says `none` under 5H. */}
             <Box marginLeft={GAP} width={QUOTA} flexShrink={0} justifyContent="flex-end">
               {api ? (
                 <Text color={color.muted}>API</Text>
               ) : (
-                <QuotaCell window={snapshot?.session} live={live} width={QUOTA} cut={cut} />
+                <QuotaCell
+                  window={snapshot?.session}
+                  live={live}
+                  width={QUOTA}
+                  cut={cut}
+                  none={noSessionLimit(snapshot)}
+                />
               )}
             </Box>
             <Box marginLeft={GAP} width={QUOTA} flexShrink={0} justifyContent="flex-end">

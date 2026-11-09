@@ -141,7 +141,8 @@ describe("renderRoutesEmpty", () => {
         "",
         "  A route is a set of accounts for clausona run --route <name>.",
         "  It picks one for each run: by default the next in turn,",
-        "  skipping any account once its 5-hour or weekly use reaches 80%.",
+        "  skipping any account once its 5-hour or weekly use reaches 80%",
+        "  (its weekly use alone on a plan with no 5-hour limit).",
         "",
         "    clausona route add main          every Claude account, taking turns",
         "    clausona run --route main        run on the account it picks",
@@ -778,6 +779,61 @@ describe("a run's model limit", () => {
   });
 });
 
+/**
+ * A plan with no 5-hour limit (a verified Claude Ultra plan): its reading says so, its usage is its
+ * 7D alone, its 5H cell says `none`, and a table where no member has a 5-hour window has no 5H
+ * column.
+ */
+describe("plans with no 5-hour limit", () => {
+  /** An Ultra reading: no 5-hour limit, its week at `seven`, resetting in `sevenIn` hours. */
+  const ultra = (seven: number, sevenIn = 50): QuotaSnapshot => ({
+    state: "ok",
+    fetchedAt: NOW,
+    sessionLimit: false,
+    weekly: { usedPercent: seven, resetsAt: inHours(sevenIn) },
+  });
+  const pro = (five: number, seven: number): QuotaSnapshot => ({ ...quota(five, seven), sessionLimit: true });
+  const spec: RouteSpec = { tool: "claude", from: ["team", "work", "side"], strategy: "headroom" };
+
+  it("explain leaves out the 5H column when no member has a 5-hour window", () => {
+    const r = rank(spec, { "claude:team": ultra(22), "claude:work": ultra(34), "claude:side": ultra(90) });
+    const text = plain(renderRouteDetail("main", r, at(120)));
+    expect(text).toMatch(/^ {4}ACCOUNT\s+7D$/m);
+    expect(text).toMatch(/^ {2}▸ claude:team\s+22% 2d\s+picked next$/m);
+    expect(text).toMatch(/^ {4}claude:side\s+90% 2d\s+over 80%$/m);
+    expect(text).not.toMatch(/claude:\S+\s+none/);
+  });
+
+  it("explain brings 5H back for one member that has the window, and says none for the others", () => {
+    const r = rank(spec, { "claude:team": ultra(22), "claude:work": pro(85, 10), "claude:side": quota(5, 40) });
+    const text = plain(renderRouteDetail("main", r, at(120)));
+    expect(text).toMatch(/^ {4}ACCOUNT\s+5H\s+7D$/m);
+    expect(text).toMatch(/^ {2}▸ claude:team\s+none\s+22% 2d\s+picked next$/m);
+    expect(text).toMatch(/^ {4}claude:work\s+85% 1h\s+10% 2d\s+over 80%$/m);
+    expect(widest(renderRouteDetail("main", r, at(80)))).toBeLessThanOrEqual(80);
+  });
+
+  it("explain's JSON says whether each member has a 5-hour limit, null when no reading says", () => {
+    const r = rank(spec, { "claude:team": ultra(22), "claude:work": pro(5, 10), "claude:side": quota(5, 40) });
+    const json = explainJson("main", "flag", r) as { members: Array<Record<string, unknown>> };
+    const of = (id: string) => json.members.find((entry) => entry.profile === id);
+    expect([of("claude:team")?.sessionLimit, of("claude:team")?.fiveHour]).toEqual([false, null]);
+    expect(of("claude:work")?.sessionLimit).toBe(true);
+    expect(of("claude:side")?.sessionLimit).toBeNull();
+  });
+
+  it("exit 75 says the week resets, and names the --wait that reaches it", () => {
+    const r = rank(
+      { ...spec, from: ["team", "work"] },
+      { "claude:team": ultra(100, 52), "claude:work": ultra(100, 70) },
+    );
+    const text = plain(renderNoAccount("main", r, at(120)));
+    expect(text).toMatch(/^ {4}ACCOUNT\s+7D\s+FREE AGAIN$/m);
+    expect(text).toMatch(/^ {4}claude:team\s+100% 2d\s+in 2d 4h \(7D resets\)\s+soonest$/m);
+    expect(text).toContain("Run again after 2d 4h or with --wait=52h, or see everything with:");
+  });
+});
+
 describe("a Codex model limit with two windows", () => {
   const codex = ["codex:a", "codex:b"].map(member);
   /** `base` with Spark's 5-hour and weekly windows, as quota.ts reads them: `scoped` is the higher, on a tie 7D. */
@@ -1020,6 +1076,7 @@ describe("JSON", () => {
         "profile",
         "role",
         "scoped",
+        "sessionLimit",
         "sevenDay",
         "skipReason",
         "status",

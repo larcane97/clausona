@@ -1067,7 +1067,8 @@ const NO_ROUTES_INDENT = 2;
 const newRouteSettings = (accounts: number): Array<[string, string]> => [
   ["Accounts", accountsText(accounts)],
   ["Order", "the next one in turn"],
-  ["Skip at", `${DEFAULT_MAX_USAGE}% of the 5-hour or weekly limit`],
+  // Of each: a plan with no 5-hour limit is skipped by its weekly one alone.
+  ["Skip at", `${DEFAULT_MAX_USAGE}% of each limit the plan has, 5-hour or weekly`],
 ];
 
 /**

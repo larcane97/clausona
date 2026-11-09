@@ -7,9 +7,10 @@ import { compareIds, type Expansion, expandPatterns, type Member, splitToolPrefi
 /**
  * Picks a profile for a route. Pure: the caller brings the members, their quota and the pick
  * record. One number drives everything - an account's usage, the highest of its 5H and 7D
- * windows and, when the run names a model, of that model's own windows; an API profile's, its
- * spend against its limit - through the stages: pool under maxUsage by strategy, fallback under
- * maxUsage in listed order, anyone under 100% by lowest usage, else nobody.
+ * windows (its 7D alone on a plan with no 5-hour limit) and, when the run names a model, of that
+ * model's own windows; an API profile's, its spend against its limit - through the stages: pool
+ * under maxUsage by strategy, fallback under maxUsage in listed order, anyone under 100% by lowest
+ * usage, else nobody.
  */
 
 /** Past the cut, any account under this can run: one at 100% of a window cannot. */
@@ -62,6 +63,12 @@ export type Row = {
   /** The pattern the member came in by. */
   pattern: string;
   fiveHour?: QuotaWindow;
+  /**
+   * Whether the account's plan has a 5-hour limit, as its reading says (QuotaWindows'
+   * `sessionLimit`): false for one that has none, so no `fiveHour` is no missing reading. Absent
+   * when the reading does not say, and for an API profile, which has no plan.
+   */
+  sessionLimit?: boolean;
   sevenDay?: QuotaWindow;
   /** The limit on the run's model, when the run names one and the account reports a limit on it. */
   scoped?: ScopedWindow;
@@ -339,6 +346,7 @@ function rowFor(member: Member, role: Row["role"], pattern: string, input: RankI
   return {
     ...base,
     ...(snapshot?.session ? { fiveHour: snapshot.session } : {}),
+    ...(snapshot?.sessionLimit === undefined ? {} : { sessionLimit: snapshot.sessionLimit }),
     ...(snapshot?.weekly ? { sevenDay: snapshot.weekly } : {}),
     ...(scoped ? { scoped } : {}),
     ...(scopedWindows.length > 1 ? { scopedWindows } : {}),

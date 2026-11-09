@@ -10,7 +10,7 @@ import { routesPaths } from "../core/routes-store.js";
 import type { ToolAdapter } from "../tools/types.js";
 import type { QuotaSnapshot, QuotaWindow, QuotaWindows, Registry } from "../types.js";
 import { stripAnsi } from "./cli-style.js";
-import { clockTime } from "./route-render.js";
+import { clockTime, renderNoAccount } from "./route-render.js";
 import type { RouteDeps } from "./route-service.js";
 import { RECHECK_MS, RETRY_MS, rankWaiting, WAKE_MARGIN_MS, WaitInterrupted } from "./route-wait.js";
 import { DEFAULT_WAIT_MS } from "./run-args.js";
@@ -134,6 +134,41 @@ describe("rankWaiting", () => {
     const atCap = setup((now) => ({ "claude:a": five(now >= NOW + 30 * MINUTE ? 0 : 100, 30 * MINUTE) }));
     const reached = await rankWaiting(MAIN, atCap.deps, { resume: false, capMs: 30 * MINUTE });
     expect(reached.ranking.outcome).toMatchObject({ kind: "picked", id: "claude:a" });
+  });
+
+  // A plan with only a weekly limit (a verified Claude Ultra plan) is held back by its week, days
+  // past a bare --wait's 5 hours: the wait gives up at once, saying the --wait that reaches the
+  // reset, and that one waits for the week.
+  it("gives up past a bare --wait on a weekly-only plan, naming the --wait that reaches its week", async () => {
+    const week = 52 * 60 * MINUTE;
+    const ultra = (percent: number): QuotaSnapshot => ({
+      state: "ok",
+      fetchedAt: NOW,
+      sessionLimit: false,
+      weekly: { usedPercent: percent, resetsAt: iso(week) },
+    });
+    const bare = setup(() => ({ "claude:a": ultra(100) }));
+    const past = await rankWaiting(ONLY_A, bare.deps, { resume: false, capMs: DEFAULT_WAIT_MS });
+    expect(past.gaveUp).toBe("past-cap");
+    expect([bare.sleeps, bare.said]).toEqual([[], []]);
+    const message = stripAnsi(
+      renderNoAccount("a", past.ranking, {
+        width: 200,
+        now: NOW,
+        wait: { capMs: DEFAULT_WAIT_MS, gaveUp: "past-cap" },
+      }),
+    );
+    expect(message).toMatch(/^ {4}claude:a\s+100% 2d\s+in 2d 4h \(7D resets\)\s+soonest$/m);
+    expect(message).toContain("Nothing comes free within the 5h wait. Wait longer with --wait=52h,");
+
+    const long = setup((now) => ({ "claude:a": ultra(now >= NOW + week ? 3 : 100) }));
+    const { ranking, gaveUp } = await rankWaiting(ONLY_A, long.deps, { resume: false, capMs: week });
+    expect(gaveUp).toBeUndefined();
+    expect(ranking.outcome).toMatchObject({ kind: "picked", id: "claude:a" });
+    const until = clockTime(NOW + week + WAKE_MARGIN_MS, NOW);
+    // Said again as the day of the reset comes, its date then left out: each time, the week.
+    expect(long.said[0]).toBe(`  waiting until ${until} for claude:a (7D resets) …`);
+    for (const line of long.said) expect(line).toMatch(/ for claude:a \(7D resets\) …$/);
   });
 
   it("gives up at once when no account held back has a known reset", async () => {

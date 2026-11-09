@@ -141,12 +141,13 @@ already spent, so you can pick a profile that still has headroom.
 PROFILE             ACCOUNT                      5H         7D
 claude:work         you@example.com              6% 23m     46% 13h
 claude:personal     you@personal.com             0%         100% 4d
-codex:work          you@example.com              —          12% 5d
+codex:work          you@example.com              none       12% 5d
 ```
 
 `5H` is the rolling session window, `7D` the weekly one, each followed by how long
 until it resets. A plan without a 5-hour limit, such as a verified Claude Ultra plan or some
-Codex plans, shows a dash under `5H`. The dashboard shows the same reading with a gauge and the precise
+Codex plans, shows `none` under `5H`, and when no account has a 5-hour limit the column is left
+out. The dashboard shows the same reading with a gauge and the precise
 reset time, plus the most-consumed per-model limit.
 
 Readings come from each tool's own usage endpoint, authenticated with the credential that

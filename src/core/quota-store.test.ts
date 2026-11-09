@@ -315,6 +315,84 @@ describe("collectQuotas", () => {
     expect(result[TARGET.id]).toMatchObject({ state: "cooldown", scopedLimits: [opus] });
   });
 
+  it("caches whether the plan has a 5-hour limit with the reading", async () => {
+    stubAdapter({
+      fetchQuota: vi.fn(async () => ({ sessionLimit: false, weekly: { usedPercent: 30, resetsAt: null } })),
+    });
+
+    const result = await collectQuotas([TARGET], { now: NOW, cachePath });
+
+    expect(result[TARGET.id]).toMatchObject({ state: "ok", sessionLimit: false, weekly: { usedPercent: 30 } });
+    expect(readCacheFile().profiles[TARGET.id].sessionLimit).toBe(false);
+  });
+
+  // A failed read keeps the last good windows, and the plan's having no 5-hour limit with them.
+  // A window whose reset has passed is of a period that is over, and is not kept: drawn dimmed,
+  // it read `61% now`.
+  it.each([
+    ["cooldown", { cooldowns: { claude: NOW + 60_000 } }, () => stubAdapter()],
+    [
+      "error",
+      { cooldowns: {} },
+      () =>
+        stubAdapter({
+          fetchQuota: vi.fn(async () => {
+            throw new Error("offline");
+          }),
+        }),
+    ],
+  ] as const)("keeps on a %s the windows that still apply and the 5-hour flag", async (state, seed, adapter) => {
+    adapter();
+    const past = new Date(NOW - 60_000).toISOString();
+    const later = new Date(NOW + 3 * 24 * 3_600_000).toISOString();
+    const opus = { usedPercent: 90, resetsAt: past, label: "Opus" };
+    const fable = { usedPercent: 40, resetsAt: later, label: "Fable" };
+    seedCache({
+      version: 1,
+      ...seed,
+      profiles: {
+        [TARGET.id]: {
+          state: "ok",
+          fetchedAt: NOW - 30 * 60_000,
+          session: { usedPercent: 61, resetsAt: past },
+          sessionLimit: true,
+          weekly: { usedPercent: 42, resetsAt: later },
+          scoped: opus,
+          scopedLimits: [opus, fable],
+        },
+      },
+    });
+
+    const result = (await collectQuotas([TARGET], { now: NOW, cachePath }))[TARGET.id];
+
+    expect(result).toMatchObject({ state, fetchedAt: NOW - 30 * 60_000, sessionLimit: true });
+    expect(result?.session).toBeUndefined();
+    expect(result?.weekly).toEqual({ usedPercent: 42, resetsAt: later });
+    expect(result?.scoped).toEqual(fable);
+    expect(result?.scopedLimits).toEqual([fable]);
+  });
+
+  it("keeps the 5-hour flag on a failed read with no window left to keep", async () => {
+    stubAdapter();
+    const past = new Date(NOW - 60_000).toISOString();
+    seedCache({
+      version: 1,
+      cooldowns: { claude: NOW + 60_000 },
+      profiles: {
+        [TARGET.id]: {
+          state: "ok",
+          fetchedAt: NOW - 30 * 60_000,
+          sessionLimit: false,
+          weekly: { usedPercent: 100, resetsAt: past },
+        },
+      },
+    });
+
+    const result = await collectQuotas([TARGET], { now: NOW, cachePath });
+
+    expect(result[TARGET.id]).toEqual({ state: "cooldown", fetchedAt: NOW, sessionLimit: false });
+  });
+
   it("resumes fetching once the cooldown has elapsed", async () => {
     const adapter = stubAdapter();
     seedCache({ version: 1, cooldowns: { claude: NOW - 1 }, profiles: {} });

@@ -944,8 +944,9 @@ against the routes: whether a route can take the profile is checked by `route ad
 `clausona list` and the dashboard show each API profile's last reading, as `budget 35%`, across the
 5H and 7D columns. They read nothing for it, since that would send its key to its provider each
 time; a reading older than five minutes is dimmed. In `clausona list --json`, an API profile's
-`quota` is `{ "state", "fetchedAt", "budget" }`, `budget` being the window `explain --json` gives,
-when there is a reading.
+`quota` is `{ "state", "fetchedAt", "budget", "sessionLimit" }`, `budget` being the window
+`explain --json` gives, when there is a reading, and `sessionLimit` null, as an API profile has no
+plan.
 
 ## Seeing the ranking
 
@@ -1185,6 +1186,7 @@ Each entry in `members`:
 | `skipReason` | null, or one of `"signed-out"`, `"expired"`, `"other-account"` (its stored sign-in is another account's), `"no-reading"`, `"not-registered"`, `"keeps-own-sessions"` (a resumed run), and for an API profile `"no-spend-limit"`, `"spend-not-reported"` or `"spend-unread"` |
 | `usage` | `{ "percent", "window", "stale" }` with `window` `"5H"`, `"7D"`, the name of the limit on the model (`"Opus"`, `"GPT-5.3-Codex-Spark 7D"`) when that is the highest, or `"budget"` for an API profile, or null |
 | `fiveHour`, `sevenDay` | `{ "usedPercent", "resetsAt" }` with `resetsAt` an ISO time or null, or null (`fiveHour` is null on a plan with no 5-hour limit, too) |
+| `sessionLimit` | `true` when the account's plan has a 5-hour limit, `false` when it has none (`fiveHour` is then null, and its usage is its 7D alone), or null when no reading says, as for an API profile |
 | `scoped` | The account's limit on the model `--model` named, as `{ "label", "usedPercent", "resetsAt" }` (of a Codex limit with two windows, the higher), or null without `--model` or such a limit |
 | `budget` | An API profile's spend against its limit, as `{ "usedPercent", "resetsAt", "spentUsd", "limitUsd", "source", "per" }`, or null. `source` is `"budget"` (a clausona budget) or `"provider"` (the key's own limit); `per` is `"day"`, `"week"`, `"month"` or null |
 | `lastPickedAt` | The ISO time of the last pick, or null |

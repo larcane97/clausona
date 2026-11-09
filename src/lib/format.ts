@@ -7,6 +7,7 @@ import type {
   ProfileListItem,
   QuotaSnapshot,
   QuotaWindow,
+  QuotaWindows,
   ToolName,
   UsageSummary,
 } from "../types.js";
@@ -181,6 +182,25 @@ export function formatQuotaPercent(window: QuotaWindow | undefined, cut?: number
   return window ? `${wholeQuotaPercent(window.usedPercent, cut)}%` : "—";
 }
 
+/** What a 5H cell says, muted, for a plan with no 5-hour limit: a dash is a reading there is not. */
+export const NO_SESSION = "none";
+
+/**
+ * Whether a reading says the plan has no 5-hour limit: it has no 5-hour window to read, which is
+ * not one that could not be read. Every surface that shows a 5H cell says `none` for it.
+ */
+export function noSessionLimit(windows: Pick<QuotaWindows, "session" | "sessionLimit"> | undefined): boolean {
+  return windows?.sessionLimit === false && !windows.session;
+}
+
+/**
+ * Whether a reading has a 5-hour window: a reading of one, or a plan that has one. A table shows
+ * its 5H column once a row does, as it shows a column once something fills it.
+ */
+export function hasSessionWindow(windows: Pick<QuotaWindows, "session" | "sessionLimit"> | undefined): boolean {
+  return Boolean(windows?.session) || windows?.sessionLimit === true;
+}
+
 /** Colours a percentage by severity; anything not freshly fetched is dimmed instead. */
 export function styledQuota(
   window: QuotaWindow | undefined,
@@ -319,7 +339,20 @@ type Layout = {
   reset: boolean;
   profileWidth: number;
   accountWidth: number;
+  /**
+   * 7D's width without 5H beside it, when a row runs across the quota columns (an API profile's
+   * budget, a lapsed sign-in) and needs more than 7D's own.
+   */
+  weeklyWidth?: number;
 };
+
+/**
+ * The quota columns a table has: 5H beside 7D, or 7D alone once no row has a 5-hour window
+ * (hasSessionWindow); and how wide a row run across them is, with reset times or without.
+ */
+type QuotaColumns = { session: boolean; across: (reset: boolean) => number };
+
+const BOTH_WINDOWS: QuotaColumns = { session: true, across: () => 0 };
 
 const LABELS: Record<ColumnKey, string> = {
   profile: "PROFILE",
@@ -341,8 +374,9 @@ function columnWidth(key: ColumnKey, layout: Layout): number {
       return layout.profileWidth;
     case "account":
       return layout.accountWidth;
-    case "session":
     case "weekly":
+      return layout.weeklyWidth ?? (layout.reset ? QUOTA_WIDTH_WITH_RESET : QUOTA_WIDTH_PLAIN);
+    case "session":
       return layout.reset ? QUOTA_WIDTH_WITH_RESET : QUOTA_WIDTH_PLAIN;
     default:
       return FIXED_WIDTHS[key];
@@ -369,10 +403,17 @@ function layoutWidth(layout: Layout): number {
  * one it always was. It does outrank spend, which `clausona usage` has in full, while
  * nothing else lists every profile's model.
  */
-function candidateLayouts(showQuota: boolean, showModel = false): Layout[] {
+function candidateLayouts(showQuota: boolean, showModel = false, columns: QuotaColumns = BOTH_WINDOWS): Layout[] {
   const base = { profileWidth: 20, accountWidth: 32 };
   const tail: ColumnKey[][] = [["cost", "input", "output"], ["cost", "input"], ["cost"], []];
-  const quota: ColumnKey[] = showQuota ? ["session", "weekly"] : [];
+  const quota: ColumnKey[] = showQuota ? (columns.session ? ["session", "weekly"] : ["weekly"]) : [];
+  // 7D alone takes a row run across the quota columns, as wide as the widest needs, and a space.
+  const sized = (layout: Layout): Layout => {
+    if (!showQuota || columns.session) return layout;
+    const own = layout.reset ? QUOTA_WIDTH_WITH_RESET : QUOTA_WIDTH_PLAIN;
+    const across = columns.across(layout.reset);
+    return across + 1 > own ? { ...layout, weeklyWidth: across + 1 } : layout;
+  };
 
   const withModel: Layout[] = showModel
     ? tail.map((extra) => ({ keys: ["profile", "account", "model", ...quota, ...extra], reset: showQuota, ...base }))
@@ -386,7 +427,7 @@ function candidateLayouts(showQuota: boolean, showModel = false): Layout[] {
     ];
   }
 
-  return [
+  const layouts: Layout[] = [
     ...withModel,
     ...tail.map((extra) => ({
       keys: ["profile", "account", ...quota, ...extra] as ColumnKey[],
@@ -396,11 +437,20 @@ function candidateLayouts(showQuota: boolean, showModel = false): Layout[] {
     { keys: ["profile", "account", ...quota], reset: false, ...base },
     { keys: ["profile", "account", ...quota], reset: false, profileWidth: 14, accountWidth: 22 },
   ];
+  return layouts.map(sized);
 }
 
-/** Widest layout that fits; the narrowest is used when even that overflows. */
-export function pickLayout(showQuota: boolean, available: number, showModel = false): Layout {
-  const layouts = candidateLayouts(showQuota, showModel);
+/**
+ * Widest layout that fits; the narrowest is used when even that overflows. `columns` says whether
+ * the table has 5H beside 7D (by default it does).
+ */
+export function pickLayout(
+  showQuota: boolean,
+  available: number,
+  showModel = false,
+  columns: QuotaColumns = BOTH_WINDOWS,
+): Layout {
+  const layouts = candidateLayouts(showQuota, showModel, columns);
   return layouts.find((layout) => layoutWidth(layout) <= available) ?? layouts[layouts.length - 1];
 }
 
@@ -445,11 +495,20 @@ export function renderList(items: ProfileListItem[], options: { width?: number }
   });
 
   // Quota columns are only worth their width once something has been fetched, and the model
-  // column once something pins a model - so a table with neither is the one it always was.
+  // column once something pins a model - so a table with neither is the one it always was. 5H
+  // likewise, once a row has a 5-hour window: on plans with none, a column of `none` says nothing.
   const showQuota = sorted.some((item) => item.quota);
   const showModel = sorted.some((item) => item.model !== undefined);
   const available = options.width ?? process.stdout.columns ?? 120;
-  const layout = pickLayout(showQuota, available, showModel);
+  // An API profile has no plan windows; its budget, when it has a reading, runs across the quota
+  // columns. So does a lapsed sign-in, in place of the windows it last read.
+  const spanOf = (item: ProfileListItem, reset: boolean) =>
+    item.kind === "api" ? item.quota && budgetSpan(item.quota, reset, now) : lapseSpan(item.quota);
+  const columns: QuotaColumns = {
+    session: sorted.some((item) => item.kind !== "api" && hasSessionWindow(item.quota)),
+    across: (reset) => Math.max(0, ...sorted.map((item) => stripAnsi(spanOf(item, reset) ?? "").length)),
+  };
+  const layout = pickLayout(showQuota, available, showModel, columns);
 
   const widths = layout.keys.map((key) => columnWidth(key, layout));
   const headerLine = `    ${layout.keys.map((key, i) => secondary(LABELS[key].padEnd(widths[i]))).join("")}`;
@@ -483,7 +542,9 @@ export function renderList(items: ProfileListItem[], options: { width?: number }
           return item.isActive ? model : secondary(model);
         }
         case "session":
-          return quotaCell(item.quota?.session, item.quota?.state, layout.reset, now);
+          return noSessionLimit(item.quota)
+            ? dim(NO_SESSION)
+            : quotaCell(item.quota?.session, item.quota?.state, layout.reset, now);
         case "weekly":
           return quotaCell(item.quota?.weekly, item.quota?.state, layout.reset, now);
         case "cost":
@@ -496,14 +557,14 @@ export function renderList(items: ProfileListItem[], options: { width?: number }
     };
 
     const last = layout.keys.length - 1;
-    // An API profile has no plan windows; its budget, when it has a reading, runs across both. So
-    // does a lapsed sign-in, in place of the windows it last read.
-    const span = item.kind === "api" ? item.quota && budgetSpan(item.quota, layout.reset, now) : lapseSpan(item.quota);
+    // Across 5H and 7D, or across 7D alone once 5H is left out.
+    const span = spanOf(item, layout.reset);
     const cells = layout.keys.flatMap((key, i) => {
       if (span !== undefined && key === "weekly" && layout.keys[i - 1] === "session") return [];
       if (span !== undefined && key === "session" && layout.keys[i + 1] === "weekly") {
         return [i + 1 === last ? span : pad(span, widths[i] + widths[i + 1])];
       }
+      if (span !== undefined && key === "weekly") return [i === last ? span : pad(span, widths[i])];
       return [i === last ? cell(key) : pad(cell(key), widths[i])];
     });
     const suffix = isCodex && spendShown ? `  ${dim("*")}` : "";
@@ -522,6 +583,16 @@ export function renderList(items: ProfileListItem[], options: { width?: number }
   return ["", `  ${dim(range)}  ${dim(localTimezoneLabel())}`, "", headerLine, sep, ...rows, ...footnotes, ""].join(
     "\n",
   );
+}
+
+/**
+ * A profile as `list --json` gives it. Its quota always says whether the plan has a 5-hour limit:
+ * `sessionLimit` true or false, or null when no reading says - an API profile's, which has no
+ * plan, or one an older clausona cached. Fields are only ever added.
+ */
+export function listItemJson(item: ProfileListItem): object {
+  if (!item.quota) return item;
+  return { ...item, quota: { ...item.quota, sessionLimit: item.quota.sessionLimit ?? null } };
 }
 
 // ─── Usage Summary ──────────────────────────────────────────────────
