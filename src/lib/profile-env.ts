@@ -5,6 +5,7 @@ import path from "node:path";
 import { HIDDEN } from "../core/api-url.js";
 import { carriesCredentialToken } from "../core/credential-token.js";
 import { settingsEnvOverrides } from "../core/doctor.js";
+import { isOpenRouter, OPENROUTER_APP_HEADERS } from "../core/openrouter.js";
 import { isPosixEnvName } from "../core/shell.js";
 import { getAdapter } from "../tools/registry.js";
 import type { Profile, ShownKind } from "../types.js";
@@ -337,7 +338,8 @@ async function settingsEnvWarnings(
  *
  * Merge order is config dir, then the API block, then the profile's free-form env map —
  * so anything the user set explicitly in the advanced section wins, except the config
- * variable itself, which would break profile isolation.
+ * variable itself, which would break profile isolation. The API block is the endpoint, the
+ * key, and on OpenRouter the app attribution headers.
  */
 export async function buildProfileEnv(id: string, profile: Profile, deps: Deps = {}): Promise<BuiltEnv> {
   const resolve = deps.resolveSecret ?? resolveSecret;
@@ -369,6 +371,10 @@ export async function buildProfileEnv(id: string, profile: Profile, deps: Deps =
       // is more actionable than a shell function that silently does nothing.
       warnings.push(`${id}: ${error instanceof Error ? error.message : String(error)}`);
     }
+    // OpenRouter counts a request for an app only when it carries the app's headers. An
+    // ANTHROPIC_CUSTOM_HEADERS in the profile's env map is applied below and replaces these,
+    // which is how a profile sends its own headers, or none (an empty value).
+    if (isOpenRouter(env.ANTHROPIC_BASE_URL)) env.ANTHROPIC_CUSTOM_HEADERS = OPENROUTER_APP_HEADERS;
     warnings.push(...(await settingsEnvWarnings(id, profile.configDir, readFile)));
   }
 

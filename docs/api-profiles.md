@@ -385,8 +385,9 @@ profile's own key or in its place. So with an API profile active, clausona remov
 credential and endpoint-routing variable it knows about from that run, unless the profile's
 own env map sets it:
 
-- the auth variables — `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`
-  — and `ANTHROPIC_CUSTOM_HEADERS`, which can carry an `Authorization` header of its own
+- the auth variables (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`)
+  and `ANTHROPIC_CUSTOM_HEADERS`, which can carry its own `Authorization` header; on
+  OpenRouter, clausona's [app headers](#openrouters-app-headers) replace it
 - a subscription's OAuth refresh token
 - the four file-descriptor credential sources
 - the workload-identity-federation set: the identity token or its file, and the rule-id and
@@ -423,6 +424,28 @@ as an error — `ANTHROPIC_MODEL` there as a warning — without quoting its val
 launch of an API profile warns about the ones that move the key or the traffic. The fix is to
 move the setting out of `settings.json` into the profile that needs it:
 `clausona config <that profile> --set KEY=VALUE`.
+
+## OpenRouter's app headers
+
+When a profile's base URL is on `openrouter.ai`, it sends three headers with every request
+through Claude Code's `ANTHROPIC_CUSTOM_HEADERS`:
+
+```
+HTTP-Referer: https://larcane97.github.io/clausona/
+X-OpenRouter-Title: clausona
+X-OpenRouter-Categories: cli-agent
+```
+
+These are OpenRouter's [app attribution](https://openrouter.ai/docs/app-attribution) headers.
+OpenRouter uses them to count requests under clausona in its app rankings. They only name
+clausona, not your account, the profile, the model, or your machine.
+
+Setting `ANTHROPIC_CUSTOM_HEADERS` in the profile's own settings replaces them. You can set
+your own headers, or set it empty to send none:
+
+```bash
+clausona config claude:gw --set ANTHROPIC_CUSTOM_HEADERS=
+```
 
 ## What `list` shows
 

@@ -1006,6 +1006,17 @@ describe("config --set / --unset", () => {
     expect(h.stderr()).toContain("ANTHROPIC_CUSTOM_HEADERS is stored in plain text");
   });
 
+  // An empty value holds nothing to warn about: it is how an OpenRouter profile sends no
+  // app headers.
+  it("says nothing extra when a setting that can hold a credential is set empty", async () => {
+    const h = await harness({ "claude:gw": API_PROFILE });
+
+    await h.run("config", "claude:gw", "--set", "ANTHROPIC_CUSTOM_HEADERS=");
+
+    expect(h.stderr()).not.toContain("plain text");
+    expect(h.profile("claude:gw").env?.ANTHROPIC_CUSTOM_HEADERS).toBe("");
+  });
+
   it("says nothing extra for an ordinary setting", async () => {
     const h = await harness({ "claude:gw": API_PROFILE });
 

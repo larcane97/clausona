@@ -117,6 +117,10 @@ function guardedNames(line: string): string[] | undefined {
  * Everything an API profile clears beyond the three auth variables and custom headers, as
  * `--json` names it: the other credential sources, then every routing variable.
  */
+/** clausona's OpenRouter attribution, written out rather than imported so it is pinned. */
+const APP_HEADERS =
+  "HTTP-Referer: https://larcane97.github.io/clausona/\nX-OpenRouter-Title: clausona\nX-OpenRouter-Categories: cli-agent";
+
 const CLEARED_REST = {
   CLAUDE_CODE_OAUTH_REFRESH_TOKEN: null,
   CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: null,
@@ -367,7 +371,7 @@ describe("_shell-env", () => {
           email: "",
           label: "router",
           api: {
-            baseUrl: "https://openrouter.ai/api",
+            baseUrl: "https://gateway.example.com/anthropic",
             authScheme: "bearer",
             secret: { source: "env", name: "CLAUSONA_TEST_SECRET" },
           },
@@ -387,8 +391,41 @@ describe("_shell-env", () => {
       ANTHROPIC_CUSTOM_HEADERS: null,
       ...CLEARED_REST,
       CLAUDE_CONFIG_DIR: h.workDir,
+      ANTHROPIC_BASE_URL: "https://gateway.example.com/anthropic",
+      ANTHROPIC_AUTH_TOKEN: "sk-or-not-a-real-key",
+    });
+  });
+
+  // OpenRouter counts usage for an app only from requests that carry its attribution headers.
+  // PowerShell gets them as one value with its line breaks, which ConvertFrom-Json restores.
+  it("hands an OpenRouter profile clausona's app headers in place of a JSON null", async () => {
+    const h = await harness((home, workDir) =>
+      registryWith(
+        {
+          tool: "claude",
+          kind: "api",
+          configDir: workDir,
+          email: "",
+          label: "openrouter.ai",
+          api: {
+            baseUrl: "https://openrouter.ai/api",
+            authScheme: "bearer",
+            secret: { source: "env", name: "CLAUSONA_TEST_SECRET" },
+          },
+        },
+        home,
+      ),
+    );
+    vi.stubEnv("CLAUSONA_TEST_SECRET", "sk-or-not-a-real-key");
+
+    expect(JSON.parse(await h.run("claude", "--json"))).toEqual({
+      ANTHROPIC_API_KEY: null,
+      CLAUDE_CODE_OAUTH_TOKEN: null,
+      ...CLEARED_REST,
+      CLAUDE_CONFIG_DIR: h.workDir,
       ANTHROPIC_BASE_URL: "https://openrouter.ai/api",
       ANTHROPIC_AUTH_TOKEN: "sk-or-not-a-real-key",
+      ANTHROPIC_CUSTOM_HEADERS: APP_HEADERS,
     });
   });
 
@@ -836,7 +873,9 @@ describe("_shell-env", () => {
   /**
    * An inherited ANTHROPIC_CUSTOM_HEADERS can carry an Authorization header to the profile's
    * endpoint, and an inherited provider switch sends the tool to Bedrock or Vertex with the
-   * profile's base URL ignored. Both are cleared unless the profile sets them itself.
+   * profile's base URL ignored. Both are cleared unless the profile sets them itself. On
+   * OpenRouter clausona's app headers take the inherited ones' place, one per line - read
+   * back with printf, since `env` prints a value with line breaks as several lines.
    */
   for (const c of [
     { name: "clears an inherited provider switch and custom headers", env: undefined, expected: {} },
@@ -844,6 +883,18 @@ describe("_shell-env", () => {
       name: "keeps a provider switch and custom headers the env map sets",
       env: { ANTHROPIC_CUSTOM_HEADERS: "X-Team: platform", CLAUDE_CODE_USE_BEDROCK: "1" },
       expected: { ANTHROPIC_CUSTOM_HEADERS: "X-Team: platform", CLAUDE_CODE_USE_BEDROCK: "1" },
+    },
+    {
+      name: "sends clausona's app headers to OpenRouter in place of inherited ones",
+      baseUrl: "https://openrouter.ai/api",
+      env: undefined,
+      expected: { ANTHROPIC_CUSTOM_HEADERS: APP_HEADERS },
+    },
+    {
+      name: "sends no headers to OpenRouter when the env map empties them",
+      baseUrl: "https://openrouter.ai/api",
+      env: { ANTHROPIC_CUSTOM_HEADERS: "" },
+      expected: { ANTHROPIC_CUSTOM_HEADERS: "" },
     },
   ]) {
     it.skipIf(process.platform === "win32")(c.name, { timeout: SPAWNING_TEST_TIMEOUT_MS }, async () => {
@@ -857,7 +908,7 @@ describe("_shell-env", () => {
             email: "",
             label: "router",
             api: {
-              baseUrl: "https://openrouter.ai/api",
+              baseUrl: c.baseUrl ?? "https://gateway.example.com/anthropic",
               authScheme: "bearer",
               secret: { source: "env", name: "CLAUSONA_TEST_SECRET" },
             },
@@ -870,12 +921,14 @@ describe("_shell-env", () => {
       const out = await h.run("claude");
       const outPath = path.join(h.home, "shell-env.sh");
       const childEnvPath = path.join(h.home, "child.env");
+      const headersPath = path.join(h.home, "child.headers");
       writeFileSync(outPath, out);
 
       const script = [
         "(",
         `  eval "$(cat '${outPath}')"`,
         `  env > '${childEnvPath}'`,
+        `  if [ "\${ANTHROPIC_CUSTOM_HEADERS+set}" = set ]; then printf %s "$ANTHROPIC_CUSTOM_HEADERS" > '${headersPath}'; fi`,
         ")",
         `printf 'parent %s|%s\\n' "$CLAUDE_CODE_USE_BEDROCK" "$ANTHROPIC_CUSTOM_HEADERS"`,
       ].join("\n");
@@ -894,7 +947,7 @@ describe("_shell-env", () => {
           .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
       );
       expect({
-        ANTHROPIC_CUSTOM_HEADERS: child.ANTHROPIC_CUSTOM_HEADERS,
+        ANTHROPIC_CUSTOM_HEADERS: existsSync(headersPath) ? readFileSync(headersPath, "utf8") : undefined,
         CLAUDE_CODE_USE_BEDROCK: child.CLAUDE_CODE_USE_BEDROCK,
       }).toEqual({ ANTHROPIC_CUSTOM_HEADERS: undefined, CLAUDE_CODE_USE_BEDROCK: undefined, ...c.expected });
       expect(child.ANTHROPIC_AUTH_TOKEN).toBe("sk-or-profile-token");

@@ -38,7 +38,7 @@ const SENTINELS = {
   ANTHROPIC_IDENTITY_TOKEN: "parent-sentinel-identity-token",
 };
 
-async function harness(secretResolves: boolean) {
+async function harness(secretResolves: boolean, baseUrl = "https://gateway.example.com/anthropic") {
   const home = mkdtempSync(path.join(tmpdir(), "clausona-run-"));
   temps.push(home);
   const workDir = path.join(home, ".claude-glm");
@@ -62,7 +62,7 @@ async function harness(secretResolves: boolean) {
           email: "",
           label: "router",
           api: {
-            baseUrl: "https://openrouter.ai/api",
+            baseUrl,
             authScheme: "bearer",
             secret: { source: "env", name: "CLAUSONA_TEST_PROFILE_SECRET" },
           },
@@ -129,7 +129,7 @@ describe("clausona run", () => {
         for (const value of Object.values(SENTINELS).filter((v) => v !== "1")) {
           expect(Object.values(env)).not.toContain(value);
         }
-        expect(env.ANTHROPIC_BASE_URL).toBe("https://openrouter.ai/api");
+        expect(env.ANTHROPIC_BASE_URL).toBe("https://gateway.example.com/anthropic");
         expect(env.CLAUDE_CONFIG_DIR).toBe(h.workDir);
         expect(env.ANTHROPIC_AUTH_TOKEN).toBe(secretResolves ? "sk-or-profile-token" : undefined);
         // Everything else the tool needs still arrives.
@@ -137,6 +137,26 @@ describe("clausona run", () => {
         expect(env.HOME).toBe(h.home);
       });
     }
+  }
+
+  // OpenRouter counts usage for an app only from requests that carry its attribution headers:
+  // the run hands the tool clausona's, and never the caller's.
+  for (const platform of ["win32", "linux"] as const) {
+    it(`hands the tool clausona's app headers for an OpenRouter profile on ${platform}`, async () => {
+      const h = await harness(true, "https://openrouter.ai/api");
+
+      expect(await h.runProfile("claude:glm", ["--version"], platform)).toBe(7);
+
+      const env = h.calls[0]?.env ?? {};
+      expect(Object.keys(env).filter((name) => name.toUpperCase() === "ANTHROPIC_CUSTOM_HEADERS")).toEqual([
+        "ANTHROPIC_CUSTOM_HEADERS",
+      ]);
+      expect(env.ANTHROPIC_CUSTOM_HEADERS).toBe(
+        "HTTP-Referer: https://larcane97.github.io/clausona/\nX-OpenRouter-Title: clausona\nX-OpenRouter-Categories: cli-agent",
+      );
+      expect(env.ANTHROPIC_BASE_URL).toBe("https://openrouter.ai/api");
+      expect(env.ANTHROPIC_AUTH_TOKEN).toBe("sk-or-profile-token");
+    });
   }
 
   it("says a prompt in the profile's place is not a profile or a tool, and launches nothing", async () => {

@@ -350,6 +350,16 @@ describe("evaluateApiHealth", () => {
       expect(health({ settings: { apiKeyHelper: false } })).toEqual([]);
     });
 
+    // An empty ANTHROPIC_CUSTOM_HEADERS is how an OpenRouter profile sends no app headers.
+    it("passes over a setting that can hold a credential when its value is blank", () => {
+      const issues = health({
+        profile: { ...apiProfile, env: { ANTHROPIC_CUSTOM_HEADERS: "", OTEL_EXPORTER_OTLP_HEADERS: "  " } },
+        credentialEnvKeys: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS"],
+      });
+
+      expect(issues).toEqual([]);
+    });
+
     it("reports a credential kept in the profile's plain-text env map", () => {
       const issues = health({
         profile: { ...apiProfile, env: { ANTHROPIC_MODEL: "glm-5", ANTHROPIC_API_KEY: "sk-plain" } },

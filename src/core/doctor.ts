@@ -402,7 +402,9 @@ export function evaluateApiHealth({
       });
       continue;
     }
-    if (!secretEnvName(key)) continue;
+    // A blank value holds no secret: it is how an OpenRouter profile sends no app headers.
+    const value = profile.env?.[key];
+    if (!secretEnvName(key) || (typeof value === "string" && value.trim() === "")) continue;
     // Also a warning: the env map is a documented, supported place to put a value, and a
     // profile that keeps a key there runs exactly as intended.
     const { commands, keyFrom, keepInShell, noEndpoint } = plaintextEnvRemedy(
