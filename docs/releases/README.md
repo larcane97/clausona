@@ -72,8 +72,8 @@ GitHub release does not depend on it.
    `npm install -g clausona` install it. npm asks for your two-factor code.
 
 3. Name release.yml as the package's trusted publisher, on the day you push the next release tag:
-   npm drops a trusted publisher that has not published within two days. If that happens, delete
-   it and add it again. On npmjs.com, open the package's Settings, then Trusted Publisher, choose
+   a new trusted publisher expires when its first publish does not come within two days. If that
+   happens, delete it and add it again. On npmjs.com, open the package's Settings, then Trusted Publisher, choose
    GitHub Actions and enter user `larcane97`, repository `clausona` and workflow filename
    `release.yml`, with no environment. Under the allowed actions, tick `npm publish`. Or, with
    npm 11.15 or later:
