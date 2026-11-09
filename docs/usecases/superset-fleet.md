@@ -15,7 +15,7 @@ and [tmux](tmux-fleet.md).
 ## Why not subagents?
 
 - **Limits.** Subagents spend the limits of the account their session runs on. A fan-out of
-  five uses up one account's 5-hour window five times as fast.
+  five uses up one account's limits five times as fast.
 - **Visibility.** A subagent runs out of sight. You see its result, not its work, and you
   cannot type into it.
 - **Each Superset worker is an ordinary Claude Code or Codex session in a tab.** You can read along,

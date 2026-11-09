@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>clausona: multiple Claude Code and Codex accounts with shared skills, hooks and history</title>
-  <meta name="description" content="Run several Claude Code and Codex accounts on one machine, each with its own sign-in and one shared setup. Dynamic routing picks the account for each run.">
+  <title>clausona: switch Claude Code and Codex accounts while keeping the same conversation</title>
+  <meta name="description" content="Switch Claude Code and Codex CLI accounts without logging out, keeping the same conversation. This account switcher shares skills, hooks and settings.">
   <link rel="canonical" href="https://larcane97.github.io/clausona/">
   <meta name="google-site-verification" content="JbB6RBZdOd_Rc0h4TI0OgwR7v2q9eaq2YHDv3pgQkxA">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="clausona">
-  <meta property="og:title" content="clausona: multiple Claude Code and Codex accounts, one shared setup">
+  <meta property="og:title" content="clausona: switch Claude Code and Codex accounts while keeping the same conversation">
   <meta property="og:description" content="Each account keeps its own sign-in. Skills, hooks, plugins and settings stay shared, and conversation history can be too.">
   <meta property="og:url" content="https://larcane97.github.io/clausona/">
   <meta property="og:image" content="https://larcane97.github.io/clausona/assets/social-preview.png">
@@ -112,8 +112,8 @@
     <div class="wrap">
       <section class="hero" aria-labelledby="title">
         <div>
-          <h1 id="title">Multiple Claude Code and Codex accounts, one shared setup</h1>
-          <p class="lead">You're signed in to Claude Code at work and want your personal account in the next terminal. clausona keeps the two sign-ins apart and lets them share one set of skills, hooks, plugins and settings. They can share conversation history too.</p>
+          <h1 id="title">Switch Claude Code and Codex accounts while keeping the same conversation</h1>
+          <p class="lead">Say you're signed in to Claude Code on a work account and want your personal account in the next terminal. clausona keeps each sign-in separate, so you switch accounts without logging out, and the conversation you were in can come along. Your skills, hooks, plugins and settings stay shared.</p>
 
           <p class="light-line">It's a shell hook and a few symbolic links. <code>claude</code> starts as fast as it does without it.</p>
 
@@ -326,7 +326,7 @@ claude --continue    <span class="c"># the latest conversation in this folder</s
           </div>
           <div>
             <dt>Usage for all your accounts</dt>
-            <dd><code>clausona list</code> and the dashboard show your 5-hour and weekly limits side by side, with the time left until they reset.</dd>
+            <dd><code>clausona list</code> and the dashboard display each account's weekly limit side by side, along with the 5-hour limit on plans that have one and the time remaining until each resets.</dd>
           </div>
           <div>
             <dt>Routing</dt>
@@ -342,7 +342,7 @@ claude --continue    <span class="c"># the latest conversation in this folder</s
           </div>
           <div>
             <dt>Agents on different accounts</dt>
-            <dd>Parallel agents can run on different accounts, or on an API model such as DeepSeek. Start them in <a href="https://superset.sh">Superset</a>, <a href="https://github.com/herdrdev/herdr">herdr</a>, <a href="https://github.com/stablyai/orca">Orca</a> or tmux. Each of the four has a plugin that lets one Claude Code or Codex session plan the work and route it by your rules. <a href="guides/parallel-claude-code-agents/">How it works</a>.</dd>
+            <dd>Parallel agents can run on different accounts, or on an API model such as DeepSeek. Start them in <a href="https://paradev.com">Paradev</a> (formerly Superset), <a href="https://github.com/herdrdev/herdr">herdr</a>, <a href="https://github.com/stablyai/orca">Orca</a> or tmux. Each of the four has a plugin that lets one Claude Code or Codex session plan the work and route it by your rules. <a href="guides/parallel-claude-code-agents/">How it works</a>.</dd>
           </div>
           <div>
             <dt>macOS, Linux and Windows</dt>
@@ -358,12 +358,14 @@ claude --continue    <span class="c"># the latest conversation in this folder</s
         <ul class="guide-list">
           <li><a href="guides/multiple-claude-code-accounts/">How to use multiple Claude Code accounts on one machine<span>Linking it by hand with CLAUDE_CONFIG_DIR, and what to leave out.</span></a></li>
           <li><a href="guides/multiple-codex-cli-accounts/">How to use multiple Codex CLI accounts<span>One CODEX_HOME per account, and the files that must not be shared.</span></a></li>
+          <li><a href="guides/claude-code-account-switchers/">Comparing Claude Code account switchers<span>A side-by-side look at claude-swap, ccam, aisw, codex-auth and clausona from their docs.</span></a></li>
           <li><a href="guides/parallel-claude-code-agents/">Run parallel Claude Code agents on different accounts and models<span>Agents you can watch and steer on different accounts, or on an API model such as DeepSeek.</span></a></li>
           <li><a href="guides/parallel-agents-in-herdr/">Run parallel Claude Code and Codex agents in herdr<span>One session splits the job across herdr panes, each on its own account.</span></a></li>
           <li><a href="guides/parallel-agents-in-orca/">Run parallel Claude Code and Codex agents in Orca<span>One session splits the job across Orca worktrees, each on its own account.</span></a></li>
           <li><a href="guides/parallel-agents-in-tmux/">Run parallel Claude Code and Codex agents in tmux<span>One session splits the job across tmux windows, each on its own account. Works over SSH.</span></a></li>
           <li><a href="guides/claude-code-skills-mcp-hooks/">See which skills, MCP servers and hooks Claude Code loads, and turn them off<span>What each account loads in a project, and how to turn one off or undo it.</span></a></li>
           <li><a href="ko/" hreflang="ko" lang="ko">Claude Code와 Codex 계정 여러 개를 동시에 쓰는 법<span>스킬, hook, 대화 기록까지 공유하면서 계정을 나누는 방법.</span></a></li>
+          <li><a href="ko/multiple-codex-cli-accounts/" hreflang="ko" lang="ko">Codex CLI 계정 여러 개 쓰는 법<span>로그아웃 없이 계정을 바꾸고 다른 계정에서 대화를 이어 가는 방법.</span></a></li>
           <li><a href="ko/parallel-agents/" hreflang="ko" lang="ko">Claude Code 에이전트를 여러 계정과 모델로 병렬 실행하기<span>에이전트마다 다른 계정이나 DeepSeek 같은 API 모델을 쓰는 방법. 어느 터미널에서든 됩니다.</span></a></li>
           <li><a href="ko/parallel-agents-in-herdr/" hreflang="ko" lang="ko">herdr에서 Claude Code와 Codex 에이전트를 계정별로 병렬 실행하기<span>세션 하나가 herdr 창마다 다른 계정으로 작업을 나눠 맡깁니다.</span></a></li>
           <li><a href="ko/parallel-agents-in-orca/" hreflang="ko" lang="ko">Orca에서 Claude Code와 Codex 에이전트를 계정별로 병렬 실행하기<span>세션 하나가 Orca worktree마다 다른 계정으로 작업을 나눠 맡깁니다.</span></a></li>
