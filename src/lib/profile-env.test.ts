@@ -309,9 +309,13 @@ describe("buildProfileEnv", () => {
 
     it("clears every credential but the profile's own, and every routing variable, for api-key", async () => {
       const profile = apiProfile({
-        api: { baseUrl: "https://openrouter.ai/api", authScheme: "api-key", secret: { source: "keychain" } },
+        api: {
+          baseUrl: "https://gateway.example.com/anthropic",
+          authScheme: "api-key",
+          secret: { source: "keychain" },
+        },
       });
-      const { env, unset } = await buildProfileEnv("claude:or", profile, deps);
+      const { env, unset } = await buildProfileEnv("claude:gw", profile, deps);
       expect(unset).toEqual([...except(CREDENTIALS, "ANTHROPIC_API_KEY"), ...ROUTING]);
       expect(env.ANTHROPIC_API_KEY).toBe("sk-test");
     });
@@ -338,7 +342,7 @@ describe("buildProfileEnv", () => {
     for (const authScheme of ["bearer", "api-key"] as const) {
       it(`clears every credential variable when a ${authScheme} profile's key will not resolve`, async () => {
         const profile = apiProfile({
-          api: { baseUrl: "https://openrouter.ai/api", authScheme, secret: { source: "keychain" } },
+          api: { baseUrl: "https://gateway.example.com/anthropic", authScheme, secret: { source: "keychain" } },
         });
         const { env, unset } = await buildProfileEnv("claude:glm", profile, {
           ...deps,
@@ -380,6 +384,77 @@ describe("buildProfileEnv", () => {
         const { env, unset } = await buildProfileEnv("claude:glm", profile, deps);
         for (const key of unset) expect(env, key).not.toHaveProperty(key);
       }
+    });
+  });
+
+  /**
+   * OpenRouter counts a request for an app only when it carries the app's attribution headers.
+   * Claude Code 2.1.319 sends each line of ANTHROPIC_CUSTOM_HEADERS as a header on
+   * /v1/messages, and none when the value is empty (checked against a local server).
+   */
+  describe("OpenRouter app attribution", () => {
+    const APP_HEADERS =
+      "HTTP-Referer: https://larcane97.github.io/clausona/\nX-OpenRouter-Title: clausona\nX-OpenRouter-Categories: cli-agent";
+    const openRouter = (overrides: Partial<Profile> = {}, baseUrl = "https://openrouter.ai/api") =>
+      apiProfile({
+        label: "openrouter.ai",
+        api: { baseUrl, authScheme: "bearer", secret: { source: "keychain" } },
+        ...overrides,
+      });
+
+    it("sends clausona's app headers to OpenRouter in place of the caller's, naming nothing else", async () => {
+      const { env, unset, warnings } = await buildProfileEnv("claude:or", openRouter(), deps);
+      expect(env.ANTHROPIC_CUSTOM_HEADERS).toBe(APP_HEADERS);
+      expect(unset).not.toContain("ANTHROPIC_CUSTOM_HEADERS");
+      expect(warnings).toEqual([]);
+      for (const own of ["claude:or", "sk-test", "/home/u/.claude-glm"]) {
+        expect(env.ANTHROPIC_CUSTOM_HEADERS).not.toContain(own);
+      }
+    });
+
+    it("knows OpenRouter by its host alone", async () => {
+      for (const baseUrl of [
+        "https://openrouter.ai/api",
+        "https://OpenRouter.ai/api/",
+        "https://openrouter.ai:443/api",
+      ]) {
+        const { env } = await buildProfileEnv("claude:or", openRouter({}, baseUrl), deps);
+        expect(env.ANTHROPIC_CUSTOM_HEADERS, baseUrl).toBe(APP_HEADERS);
+      }
+      for (const baseUrl of [
+        "http://gpu-box:30000",
+        "https://api.anthropic.com",
+        "https://evilopenrouter.ai/api",
+        "https://openrouter.ai.example.com/api",
+        "https://gateway.example.com/openrouter.ai",
+      ]) {
+        const { env, unset } = await buildProfileEnv("claude:x", openRouter({}, baseUrl), deps);
+        expect(env, baseUrl).not.toHaveProperty("ANTHROPIC_CUSTOM_HEADERS");
+        expect(unset, baseUrl).toContain("ANTHROPIC_CUSTOM_HEADERS");
+      }
+    });
+
+    it("lets the env map's ANTHROPIC_CUSTOM_HEADERS replace them, or send none", async () => {
+      for (const value of ["X-Team: platform", ""]) {
+        const profile = openRouter({ env: { ANTHROPIC_CUSTOM_HEADERS: value } });
+        const { env, unset, warnings } = await buildProfileEnv("claude:or", profile, deps);
+        expect(env.ANTHROPIC_CUSTOM_HEADERS, value).toBe(value);
+        expect(unset).not.toContain("ANTHROPIC_CUSTOM_HEADERS");
+        expect(warnings).toEqual([]);
+      }
+    });
+
+    // Only an API profile's endpoint is clausona's to name; a subscription profile pointed
+    // elsewhere by a hand edit goes on as it is.
+    it("sends none from a subscription profile", async () => {
+      const profile: Profile = {
+        tool: "claude",
+        configDir: "/home/u/.claude-work",
+        email: "you@example.com",
+        env: { ANTHROPIC_BASE_URL: "https://openrouter.ai/api" },
+      };
+      const { env } = await buildProfileEnv("claude:work", profile, deps);
+      expect(env).not.toHaveProperty("ANTHROPIC_CUSTOM_HEADERS");
     });
   });
 
@@ -504,7 +579,7 @@ describe("buildProfileEnv", () => {
           for (const managed of ["ANTHROPIC_BASE_URL", ...CREDENTIALS, ...ROUTING]) {
             for (const variant of variants(managed)) {
               const profile = apiProfile({
-                api: { baseUrl: "https://openrouter.ai/api", authScheme, secret: { source: "keychain" } },
+                api: { baseUrl: "https://gateway.example.com/anthropic", authScheme, secret: { source: "keychain" } },
                 env: { [variant]: "value-that-must-not-leak" },
               });
               const { env, unset, warnings } = await buildProfileEnv("claude:glm", profile, {

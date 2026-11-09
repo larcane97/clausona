@@ -357,7 +357,8 @@ function parseSecretSource(input: string): SecretSource {
  * override goes through the same map.
  *
  * It fires for any name that says it holds a secret (`isSecretEnvName`), which is wider
- * than the credential names: another service's token is no less plain text.
+ * than the credential names: another service's token is no less plain text. A blank value is
+ * passed over, as the dashboard's form and doctor do.
  *
  * The commands come from `plaintextEnvRemedy`, which doctor's finding uses too, and they
  * differ by kind and key source, because `--key` only works on an API profile and on one
@@ -366,9 +367,10 @@ function parseSecretSource(input: string): SecretSource {
  * since a key in its map most likely means an API profile was wanted, and a Codex profile
  * is not, since API profiles are Claude-only.
  */
-function warnPlaintextEnv(id: string, profile: Pick<Profile, "tool" | "kind" | "api">, keys: string[]) {
-  for (const key of keys) {
-    if (!isSecretEnvName(key)) continue;
+function warnPlaintextEnv(id: string, profile: Pick<Profile, "tool" | "kind" | "api">, env: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(env)) {
+    // An empty value holds no secret: it is how an OpenRouter profile sends no app headers.
+    if (!isSecretEnvName(key) || (typeof value === "string" && value.trim() === "")) continue;
     const credential = isCredentialEnvKey(key);
     const { commands, keyFrom, noEndpoint } = plaintextEnvRemedy(id, profile, key, credential);
     const listed = commands.map((command) => `      ${accent(command)}\n`).join("");
@@ -533,7 +535,7 @@ async function editProfileEnv(id: string, profile: Profile): Promise<string> {
   const saved = await editInEditor(`${JSON.stringify(current, null, 2)}\n`, "env.json");
   const edited = parseEditedEnv(saved);
   await updateProfileEnv(id, { set: edited, replace: true });
-  warnPlaintextEnv(id, profile, Object.keys(edited));
+  warnPlaintextEnv(id, profile, edited);
   return success(`Updated ${bold(id)} ${dim(`(${Object.keys(edited).length} setting(s))`)}`);
 }
 
@@ -593,6 +595,8 @@ function subcommandHelpText(command: string, args: string[] = []): string | unde
         `    ${" ".repeat(18)}${dim("carries the key: no user:password, no ?key=, ?token= or other parameter")}`,
         `    ${" ".repeat(18)}${dim("named for a credential, nothing that looks like a key.")}`,
         `    ${" ".repeat(18)}${dim("Plain http off this machine is noted: the key would travel unencrypted.")}`,
+        `    ${" ".repeat(18)}${dim("On openrouter.ai, runs send OpenRouter's app headers naming clausona;")}`,
+        `    ${" ".repeat(18)}${dim("--set ANTHROPIC_CUSTOM_HEADERS= sends none.")}`,
         `    ${accent("--model".padEnd(18))}${dim("Model id, stored as ANTHROPIC_MODEL. Change it later with")}`,
         `    ${" ".repeat(18)}${dim("`clausona config <profile> --model <id>`.")}`,
         `    ${accent("--auth".padEnd(18))}${dim("bearer | api-key (default: api-key for anthropic.com, else bearer)")}`,
@@ -1414,7 +1418,7 @@ export async function runCommand(command: string, args: string[]) {
         }
         // updateProfileEnv validates every entry through validateEnvEntry before it saves.
         await updateProfileEnv(ref.id, { set, unset: unsetKeys });
-        warnPlaintextEnv(ref.id, profile, Object.keys(set));
+        warnPlaintextEnv(ref.id, profile, set);
         // A name the map did not have is said as such: "Updated" read as if a setting had gone,
         // and a typo in the name looked like success.
         const before = envMapOf(profile.env) ?? {};
@@ -1633,7 +1637,7 @@ export async function runCommand(command: string, args: string[]) {
           mergeSessions: mergeSessions || undefined,
         });
         const id = profileId(tool, result.name);
-        warnPlaintextEnv(id, { tool, kind: "api", api: { baseUrl, authScheme, secret } }, Object.keys(env));
+        warnPlaintextEnv(id, { tool, kind: "api", api: { baseUrl, authScheme, secret } }, env);
         warnUnsetKeyVariable(secret);
         if (sendsKeyInClear(url)) cleartextNote(url.host);
         if (result.sharedWith.length > 0) {

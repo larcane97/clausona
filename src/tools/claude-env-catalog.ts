@@ -148,7 +148,7 @@ export const CLAUDE_ENV_CATALOG: EnvCatalogEntry[] = [
   {
     key: "ANTHROPIC_CUSTOM_HEADERS",
     label: "Custom headers",
-    hint: "Extra request headers, one per line",
+    hint: "Extra request headers, one per line; on OpenRouter they replace clausona's app headers",
     kind: "string",
     group: "transport",
   },

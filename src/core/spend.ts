@@ -1,5 +1,6 @@
 import type { BudgetPeriod, BudgetWindow, SpendReading } from "../types.js";
 import { checkBaseUrl } from "./api-url.js";
+import { isOpenRouter } from "./openrouter.js";
 import { QuotaHttpError } from "./quota.js";
 import { BUDGET_PERIODS, type Budget } from "./route-budgets.js";
 
@@ -26,8 +27,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** OpenRouter by its host, exactly; anything else is asked as a LiteLLM proxy. */
 export function spendProvider(baseUrl: string): SpendProvider {
-  const checked = checkBaseUrl(baseUrl);
-  return checked.ok && checked.url.hostname === "openrouter.ai" ? "openrouter" : "litellm";
+  return isOpenRouter(baseUrl) ? "openrouter" : "litellm";
 }
 
 function record(value: unknown): Record<string, unknown> | null {
