@@ -7,7 +7,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 
 import { bootstrapInitFromCurrentState } from "../commands.js";
 import { STAR_URL, type StarOutcome } from "../core/star.js";
-import { reinstallCommand, type UpdateOffer, type Updater } from "../core/update.js";
+import { manualUpdate, type UpdateOffer, type Updater } from "../core/update.js";
 import { loadInventoryHere, type ScreenWrites, writesHere } from "../extensions/load.js";
 import type { Inventory } from "../extensions/model.js";
 import {
@@ -1570,7 +1570,9 @@ export function App({
         if (cursor === -1 && updateOffer) {
           setMessage("");
           setUpdatePhase(
-            updateOffer.target ? { kind: "confirm" } : { kind: "manual", command: reinstallCommand(process.platform) },
+            updateOffer.target && !updater?.npm
+              ? { kind: "confirm" }
+              : { kind: "manual", ...manualUpdate({ npm: updater?.npm === true, platform: process.platform }) },
           );
           return;
         }

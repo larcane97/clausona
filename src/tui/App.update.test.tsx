@@ -299,6 +299,21 @@ describe("the dashboard's update", () => {
     instance.unmount();
   });
 
+  it("points a copy npm installed at npm, without asking", async () => {
+    const { updater, install } = fakeUpdater({ offer: { ...OFFER, target: null } });
+    const instance = renderAt(<App initialScreen="dashboard" updater={{ ...updater, npm: true }} />, 160);
+    await waitForFrame(instance.lastFrame, offered);
+    await press(instance, UP);
+    await press(instance, ENTER);
+
+    const frame = await waitForFrame(instance.lastFrame, (f) => f.includes("installed with npm"));
+    expect(frame).toContain("npm install -g clausona@latest");
+    expect(frame).not.toContain(reinstallCommand(process.platform));
+    expect(frame).not.toContain("(Y/n)");
+    expect(install).not.toHaveBeenCalled();
+    instance.unmount();
+  });
+
   it("shows nothing when there is no newer release", async () => {
     const { updater, find } = fakeUpdater({ offer: null });
     const instance = render(<App initialScreen="dashboard" updater={updater} />);

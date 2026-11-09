@@ -15,6 +15,7 @@ function setup(overrides: Partial<UpdateCommandDeps> = {}) {
   const deps: UpdateCommandDeps = {
     current: "0.3.0-beta",
     target: TARGET,
+    npm: false,
     platform: "linux",
     interactive: true,
     checkLatest,
@@ -120,6 +121,26 @@ describe("clausona update", () => {
     expect(message).toContain("not installed by the installer");
     expect(message).toContain(command);
     expect(checkLatest).not.toHaveBeenCalled();
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  it.each(["linux", "win32"] as const)("points a copy npm installed at npm on %s", async (platform) => {
+    const { deps, checkLatest, install } = setup({ target: null, npm: true, platform });
+
+    const message = await failure(runUpdateCommand([], deps));
+
+    expect(message).toBe(
+      "This clausona was installed with npm, so npm updates it. To update, run:\n    npm install -g clausona@latest",
+    );
+    expect(checkLatest).not.toHaveBeenCalled();
+    expect(install).not.toHaveBeenCalled();
+  });
+
+  // installTarget never names npm's copy; were it handed one anyway, npm's copy is still left to npm.
+  it("never replaces a copy npm installed, even with a target", async () => {
+    const { deps, install } = setup({ npm: true });
+
+    expect(await failure(runUpdateCommand(["--yes"], deps))).toContain("npm install -g clausona@latest");
     expect(install).not.toHaveBeenCalled();
   });
 

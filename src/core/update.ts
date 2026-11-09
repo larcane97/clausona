@@ -2,7 +2,8 @@
  * Self-update: learning that a newer release exists, and replacing the installed bundle with it.
  *
  * The installers put the whole program in one file, `<appDir>/index.js`, and the launcher only
- * execs node on it, so an update is that one file swapped for the release's `clausona.js`. The
+ * execs node on it, so an update is that one file swapped for the release's `clausona.js`. A copy
+ * npm installed is never swapped: npm updates it, and its user is given npm's command. The
  * dashboard and `clausona update` share everything here. The network is a parameter, so no test
  * ever reaches GitHub.
  */
@@ -165,14 +166,61 @@ export function reinstallCommand(platform: NodeJS.Platform): string {
     : `curl -fsSL ${RELEASES_URL}/latest/download/install.sh | bash`;
 }
 
+/** What updates a copy npm installed. npm keeps a record of what it installed, so only npm changes it. */
+export const NPM_UPDATE_COMMAND = "npm install -g clausona@latest";
+
+/** Whether the real path `file` lies inside a `node_modules/clausona/` directory: an npm package's copy. */
+function inNpmPackage(file: string, platform: NodeJS.Platform): boolean {
+  const parts = file.split(platform === "win32" ? /[\\/]+/ : /\/+/);
+  const name = (part: string | undefined) => (platform === "win32" ? part?.toLowerCase() : part);
+  return parts.some((part, i) => name(part) === "node_modules" && name(parts[i + 1]) === "clausona");
+}
+
+/**
+ * Whether the bundle at `entryPath` came from the npm package, as `npm install -g clausona` puts
+ * it: `<prefix>/lib/node_modules/clausona/clausona.js`, with a symlink to it on PATH (a `.cmd`
+ * shim that names it, on Windows). pnpm, yarn and bun global installs keep it under a
+ * `node_modules/clausona/` too. The realpath is what tells, since argv[1] can be the symlink.
+ */
+export function npmInstalled(entryPath: string | undefined, platform: NodeJS.Platform): boolean {
+  if (!entryPath) return false;
+  try {
+    return inNpmPackage(realpathSync(entryPath), platform);
+  } catch {
+    return false;
+  }
+}
+
+/** `npmInstalled` for this process. */
+export function currentNpmInstall(): boolean {
+  return npmInstalled(process.argv[1], process.platform);
+}
+
+/**
+ * What a copy that cannot replace itself says instead: why not, and the command that updates it.
+ * npm's copy is updated by npm; any other is pointed at the installer.
+ */
+export function manualUpdate(options: { npm: boolean; platform: NodeJS.Platform }): {
+  reason: string;
+  command: string;
+} {
+  return options.npm
+    ? { reason: "This clausona was installed with npm, so npm updates it.", command: NPM_UPDATE_COMMAND }
+    : {
+        reason: "This clausona was not installed by the installer, so it cannot replace itself.",
+        command: reinstallCommand(options.platform),
+      };
+}
+
 /**
  * The installed bundle this process runs from, or `null` when the installer did not put it there.
  *
  * Only `<appDir>/index.js` is ever replaced. A bundle run from a checkout (`node dist/index.js`)
- * or copied elsewhere belongs to whoever put it there. The installed file must also be a regular
- * file: the installer writes one, and renaming over a symlink would replace the link, not what it
- * points at, undoing someone's setup. Both sides go through realpath, so a symlinked data
- * directory still matches, and Windows paths compare without case, as its filesystem does.
+ * or copied elsewhere belongs to whoever put it there, and npm's copy belongs to npm. The
+ * installed file must also be a regular file: the installer writes one, and renaming over a
+ * symlink would replace the link, not what it points at, undoing someone's setup. Both sides go
+ * through realpath, so a symlinked data directory still matches, and Windows paths compare
+ * without case, as its filesystem does.
  */
 export function installTarget(options: {
   entryPath: string | undefined;
@@ -186,6 +234,8 @@ export function installTarget(options: {
   try {
     if (!lstatSync(expected).isFile()) return null;
     const running = realpathSync(entryPath);
+    // npm's copy is npm's to replace: swapped here, it would no longer be the version npm lists.
+    if (inNpmPackage(running, platform)) return null;
     const installed = realpathSync(expected);
     const same = platform === "win32" ? running.toLowerCase() === installed.toLowerCase() : running === installed;
     return same ? expected : null;
@@ -497,6 +547,8 @@ export type Updater = {
   install: (offer: UpdateOffer, signal?: AbortSignal) => Promise<void>;
   /** A no to the update, which holds the question commands ask after their output for seven days. */
   skip?: () => void;
+  /** Whether npm installed this copy, so that npm, not the installer, is what updates it. */
+  npm?: boolean;
 };
 
 /** `remember` is handed each tag the dashboard learns, so the commands after it offer it without checking again. */
@@ -504,8 +556,10 @@ export function createUpdater(
   options: { check?: (signal?: AbortSignal) => Promise<string | null>; remember?: (tag: string) => void } = {},
 ): Updater {
   const target = currentInstallTarget();
+  const npm = currentNpmInstall();
   const { check = (signal) => checkLatestTag({ signal }), remember } = options;
   return {
+    npm,
     find: (signal) =>
       findUpdate({
         current: __CLAUSONA_VERSION__,
@@ -520,7 +574,7 @@ export function createUpdater(
     install: (offer, signal) =>
       offer.target
         ? performUpdate({ tag: offer.tag, target: offer.target, signal })
-        : Promise.reject(new Error("This clausona was not installed by the installer, so it cannot replace itself.")),
+        : Promise.reject(new Error(manualUpdate({ npm, platform: process.platform }).reason)),
     skip: () => void skipUpdate(defaultNoticesDeps()),
   };
 }
