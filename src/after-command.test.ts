@@ -71,6 +71,7 @@ function setup(overrides: Partial<AfterCommandDeps> = {}, startAt = START) {
     notices: { path: file, now: () => clock.now, env: {} },
     current: "0.11.0-beta",
     target,
+    npm: () => false,
     platform: "linux",
     input: stdin,
     output,
@@ -404,6 +405,20 @@ describe("the update question", () => {
     const later = setup({ target: notInstalled }, START + 6 * DAY);
     await askAfterCommand(later.deps);
     expect(later.output.text).toBe("");
+  });
+
+  it("gives npm's command to a copy npm installed, never asking to replace it, and holds it seven days", async () => {
+    seed(updateDue);
+    const run = setup({ npm: () => true, platform: "darwin" });
+
+    await askAfterCommand(run.deps);
+
+    expect(run.output.plain).toBe(
+      "\n  ⬆ clausona v0.12.0-beta is available (you have v0.11.0-beta)\n    To update, run:\n    npm install -g clausona@latest\n",
+    );
+    expect(run.input.modes).toEqual([]);
+    expect(run.install).not.toHaveBeenCalled();
+    expect(stored().updateSkippedAt).toBe(at(START));
   });
 
   it("starts the day's check in the background, at most once a day, and asks from what it learned", async () => {

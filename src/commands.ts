@@ -25,10 +25,11 @@ import { trackUsage } from "./core/track-usage.js";
 import {
   checkLatestTag,
   currentInstallTarget,
+  currentNpmInstall,
   isNewer,
+  manualUpdate,
   performUpdate,
   refreshLatestTag,
-  reinstallCommand,
   skipUpdate,
   versionOfTag,
 } from "./core/update.js";
@@ -1051,6 +1052,7 @@ function subcommandHelpText(command: string, args: string[] = []): string | unde
         `  ${bold("DESCRIPTION")}`,
         `    ${dim("Replaces the installed clausona with the latest GitHub release, once its published")}`,
         `    ${dim("SHA-256 matches and it runs. Asks first; --yes (-y) goes ahead without asking.")}`,
+        `    ${dim("A clausona installed with npm is updated by npm: npm install -g clausona@latest.")}`,
         "",
       ].join("\n");
 
@@ -1891,6 +1893,8 @@ export type UpdateCommandDeps = {
   current: string;
   /** The installed bundle to replace, or `null` when the installer did not put this one there. */
   target: string | null;
+  /** Whether npm installed this copy, so that npm, not the installer, is what updates it. */
+  npm: boolean;
   platform: NodeJS.Platform;
   /** Whether there is a terminal to ask on. */
   interactive: boolean;
@@ -1938,6 +1942,7 @@ function defaultUpdateDeps(): UpdateCommandDeps {
   return {
     current: __CLAUSONA_VERSION__,
     target: currentInstallTarget(),
+    npm: currentNpmInstall(),
     platform: process.platform,
     // The question goes to stdout and the answer comes from stdin. With stdout redirected,
     // `clausona update > log` wrote the question into the file and sat waiting on its answer.
@@ -1950,10 +1955,10 @@ function defaultUpdateDeps(): UpdateCommandDeps {
 }
 
 /**
- * `clausona update`. Only the installer's own install is replaced (see `installTarget`); any other
- * copy is pointed at the installer. It asks before replacing, `(Y/n)`, so a bare Enter goes
- * ahead. Without a terminal to ask on, it goes ahead only with `--yes`, rather than reading a
- * script's next line of input as the answer.
+ * `clausona update`. Only the installer's own install is replaced (see `installTarget`); npm's
+ * copy is pointed at npm, and any other at the installer. It asks before replacing, `(Y/n)`, so a
+ * bare Enter goes ahead. Without a terminal to ask on, it goes ahead only with `--yes`, rather
+ * than reading a script's next line of input as the answer.
  */
 export async function runUpdateCommand(args: string[], deps: UpdateCommandDeps): Promise<string> {
   // `clausona update v0.3.1-beta` reads as installing that release, and it would have installed
@@ -1961,10 +1966,9 @@ export async function runUpdateCommand(args: string[], deps: UpdateCommandDeps):
   if (args.some((arg) => !arg.startsWith("-"))) {
     throw new Error("clausona update takes no arguments: it always installs the latest release.");
   }
-  if (!deps.target) {
-    throw new Error(
-      `This clausona was not installed by the installer, so it cannot replace itself. To update, run:\n    ${reinstallCommand(deps.platform)}`,
-    );
+  if (deps.npm || !deps.target) {
+    const { reason, command } = manualUpdate(deps);
+    throw new Error(`${reason} To update, run:\n    ${command}`);
   }
   const tag = await deps.checkLatest();
   if (!tag) throw new Error("Could not reach GitHub to check for updates.");

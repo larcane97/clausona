@@ -18,7 +18,11 @@ describe("updatePanelRows", () => {
       kind: "failed",
       message: "npm ERR! code EACCES: permission denied, rename '/usr/local/lib/node_modules/clausona'",
     },
-    { kind: "manual", command: "curl -fsSL https://raw.githubusercontent.com/larcane97/clausona/main/install.sh | sh" },
+    {
+      kind: "manual",
+      reason: "This clausona was not installed by the installer, so it cannot replace itself.",
+      command: "curl -fsSL https://raw.githubusercontent.com/larcane97/clausona/main/install.sh | sh",
+    },
   ];
 
   for (const phase of phases) {

@@ -25,6 +25,8 @@ import {
   findUpdate,
   installTarget,
   isNewer,
+  manualUpdate,
+  npmInstalled,
   performUpdate,
   recordLatestTag,
   refreshLatestTag,
@@ -299,6 +301,69 @@ describe("reinstallCommand", () => {
   });
 });
 
+describe("manualUpdate", () => {
+  it("points npm's copy at npm on every platform", () => {
+    for (const platform of ["darwin", "linux", "win32"] as const) {
+      expect(manualUpdate({ npm: true, platform })).toEqual({
+        reason: "This clausona was installed with npm, so npm updates it.",
+        command: "npm install -g clausona@latest",
+      });
+    }
+  });
+
+  it("points any other copy at the installer", () => {
+    expect(manualUpdate({ npm: false, platform: "linux" }).command).toBe(reinstallCommand("linux"));
+    expect(manualUpdate({ npm: false, platform: "win32" }).command).toBe(reinstallCommand("win32"));
+  });
+});
+
+describe("npmInstalled", () => {
+  const platform = process.platform;
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(tmpdir(), "clausona-npm-"));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function file(...parts: string[]): string {
+    const at = path.join(root, ...parts);
+    mkdirSync(path.dirname(at), { recursive: true });
+    writeFileSync(at, "// bundle\n");
+    return at;
+  }
+
+  it("is true for the bundle in npm's global package directory", () => {
+    const bundle = file("lib", "node_modules", "clausona", "clausona.js");
+    expect(npmInstalled(bundle, platform)).toBe(true);
+  });
+
+  // npm links <prefix>/bin/clausona to the bundle, and that link is what argv[1] names.
+  it.skipIf(process.platform === "win32")("is true through the bin link npm puts on PATH", () => {
+    const bundle = file("lib", "node_modules", "clausona", "clausona.js");
+    const bin = path.join(root, "bin", "clausona");
+    mkdirSync(path.dirname(bin), { recursive: true });
+    symlinkSync(path.join("..", "lib", "node_modules", "clausona", "clausona.js"), bin);
+
+    expect(npmInstalled(bin, platform)).toBe(true);
+    expect(npmInstalled(bundle, platform)).toBe(true);
+  });
+
+  it("is false for the installer's copy, a checkout and another package's clausona.js", () => {
+    expect(npmInstalled(file("share", "clausona", "index.js"), platform)).toBe(false);
+    expect(npmInstalled(file("clausona", "dist", "index.js"), platform)).toBe(false);
+    expect(npmInstalled(file("node_modules", "clausona-fork", "clausona.js"), platform)).toBe(false);
+  });
+
+  it("is false without an entry path, or for one that does not exist", () => {
+    expect(npmInstalled(undefined, platform)).toBe(false);
+    expect(npmInstalled(path.join(root, "node_modules", "clausona", "gone.js"), platform)).toBe(false);
+  });
+});
+
 describe("installTarget", () => {
   const platform = process.platform;
   let root: string;
@@ -327,6 +392,18 @@ describe("installTarget", () => {
   it("is the installed file when that is what runs", () => {
     const file = install();
     expect(installTarget({ entryPath: file, platform, env: dataEnv(root), homeDir: root })).toBe(file);
+  });
+
+  // Swapped in place, npm's copy would no longer be what npm lists, whatever path reached it.
+  it("is null for npm's copy, even where it is also the installer's path", () => {
+    const packageDir = path.join(root, "node_modules", "clausona");
+    const file = path.join(packageDir, "index.js");
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(file, "// bundle\n");
+
+    expect(
+      installTarget({ entryPath: file, platform, env: dataEnv(path.join(root, "node_modules")), homeDir: root }),
+    ).toBeNull();
   });
 
   it("is null for a bundle run from anywhere else", () => {

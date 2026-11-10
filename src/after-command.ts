@@ -31,9 +31,10 @@ import {
   cachedUpdateTag,
   checkLatestTag,
   currentInstallTarget,
+  currentNpmInstall,
+  manualUpdate,
   performUpdate,
   recordLatestTag,
-  reinstallCommand,
   skipUpdate,
   updateCheckDue,
   versionOfTag,
@@ -152,6 +153,8 @@ export type AfterCommandDeps = {
   current: string;
   /** The installed bundle to replace, or `null` when the installer did not put this one there. */
   target: () => string | null;
+  /** Whether npm installed this copy, so that npm, not the installer, is what updates it. */
+  npm: () => boolean;
   platform: NodeJS.Platform;
   input: () => KeyInput;
   output: Writer;
@@ -174,6 +177,7 @@ export function defaultAfterCommandDeps(): AfterCommandDeps {
     notices: defaultNoticesDeps(),
     current: __CLAUSONA_VERSION__,
     target: currentInstallTarget,
+    npm: currentNpmInstall,
     platform: process.platform,
     input: () => process.stdin,
     output: process.stdout,
@@ -274,11 +278,13 @@ async function offerUpdate(tag: string, deps: AfterCommandDeps): Promise<void> {
   const latest = `v${versionOfTag(tag)}`;
   const { output } = deps;
   const available = `${gap(deps)}  ${accent("⬆")} ${dim("clausona")} ${accent(latest)} ${dim("is available (you have")} ${accent(`v${deps.current}`)}${dim(")")}\n`;
-  // A copy the installer did not put in place cannot replace itself: what to run instead, held as a no
-  // is. The command has a line of its own, to copy whole.
-  const target = deps.target();
+  // A copy the installer did not put in place cannot replace itself: what to run instead (npm's
+  // command for npm's copy), held as a no is. The command has a line of its own, to copy whole.
+  const npm = deps.npm();
+  const target = npm ? null : deps.target();
   if (!target) {
-    output.write(`${available}    ${dim("To update, run:")}\n    ${accent(reinstallCommand(deps.platform))}\n`);
+    const { command } = manualUpdate({ npm, platform: deps.platform });
+    output.write(`${available}    ${dim("To update, run:")}\n    ${accent(command)}\n`);
     await skipUpdate(deps.notices);
     return;
   }
@@ -299,6 +305,7 @@ async function offerUpdate(tag: string, deps: AfterCommandDeps): Promise<void> {
     const result = await runUpdateCommand(["--yes"], {
       current: deps.current,
       target,
+      npm,
       platform: deps.platform,
       interactive: true,
       checkLatest: async () => {

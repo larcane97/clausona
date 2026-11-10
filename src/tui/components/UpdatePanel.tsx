@@ -7,15 +7,16 @@ import { textLines } from "../use-width.js";
 
 /**
  * The dashboard's update, once Update has been chosen. It can be a question, under way, failed,
- * or impossible in place. A failure is shown here rather than in the one-line footer, which cuts
- * a long message off at the terminal's edge.
+ * or impossible in place, which says why and the command that updates this copy instead. A
+ * failure is shown here rather than in the one-line footer, which cuts a long message off at the
+ * terminal's edge.
  */
 export type UpdatePhase =
   | { kind: "idle" }
   | { kind: "confirm" }
   | { kind: "installing" }
   | { kind: "failed"; message: string }
-  | { kind: "manual"; command: string };
+  | { kind: "manual"; reason: string; command: string };
 
 /** What the panel says in each phase that says something, a line of text each: drawn, and counted. */
 function panelTexts(phase: UpdatePhase, offer: UpdateOffer): string[] {
@@ -32,11 +33,7 @@ function panelTexts(phase: UpdatePhase, offer: UpdateOffer): string[] {
     case "failed":
       return ["Update failed", phase.message];
     case "manual":
-      return [
-        "This clausona was not installed by the installer, so it cannot replace itself.",
-        "To update, run:",
-        phase.command,
-      ];
+      return [phase.reason, "To update, run:", phase.command];
   }
 }
 

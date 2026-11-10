@@ -94,6 +94,28 @@ Windows PowerShell:
 irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex
 ```
 
+With npm, on any of these platforms:
+
+```bash
+npm install -g clausona
+```
+
+npm does not touch your shell profile, so add the shell hook yourself, then open a new shell. The
+hook is what makes a plain `claude` or `codex` start on the profile you switched to, and it defines
+`csn`. On zsh or bash, add this line to `~/.zshrc` or `~/.bashrc`:
+
+```bash
+eval "$(clausona shell-init)"
+```
+
+On PowerShell, add this line to the profile file that `$PROFILE.CurrentUserAllHosts` names:
+
+```powershell
+Invoke-Expression (& clausona shell-init | Out-String)
+```
+
+To remove a copy installed with npm, run `clausona uninstall` first, then `npm uninstall -g clausona`.
+
 **Updating.** When a newer release is out, the dashboard (`csn`) says so in its header and lists
 **Update** above Profiles; choose it and answer `Y`, and csn restarts on the new version. From a
 script or another shell, `clausona update` does the same (`--yes` skips the question). Other
@@ -103,8 +125,9 @@ for a week, as they do after a no on the dashboard or to `clausona update`. They
 release from a check that runs in the background at most once a day, so no command waits for
 GitHub; a yes asks GitHub again first, so it installs the latest release. However you update,
 the download is checked against the release's published SHA-256 before the installed copy is
-replaced. Only a copy the installer put in place updates itself; any other is pointed at the
-installer.
+replaced. Only a copy the installer put in place updates itself. For a copy installed with npm,
+`clausona update`, the dashboard and the question after commands say to run
+`npm install -g clausona@latest` instead. Any other copy is pointed at the installer.
 
 **After upgrading, open a new shell** — or re-run the hook in each shell that is already open:
 `eval "$(clausona shell-init)"` on zsh/bash, `Invoke-Expression (& clausona shell-init | Out-String)`
