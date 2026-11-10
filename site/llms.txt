@@ -4,7 +4,7 @@
 
 Facts:
 
-- Install: `curl -fsSL https://github.com/larcane97/clausona/releases/latest/download/install.sh | bash` (macOS, Linux) or `irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex` (Windows PowerShell). Needs Node.js 20 or later.
+- Install: Run `curl -fsSL https://github.com/larcane97/clausona/releases/latest/download/install.sh | bash` on macOS or Linux, or `irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex` in Windows PowerShell. You can also run `npm install -g clausona` on any of them. npm doesn't edit the shell profile, so add the shell hook by hand. Put `eval "$(clausona shell-init)"` in `~/.zshrc` or `~/.bashrc`, or `Invoke-Expression (& clausona shell-init | Out-String)` in the PowerShell profile. Every method needs Node.js 20 or later.
 - Set up: `clausona init` registers the accounts already signed in; `clausona add claude:work` or `clausona add codex:work` adds one; `csn use work` switches; `clausona run claude:personal` runs one session under another account.
 - Shared history: `clausona config <profile> --merge-sessions`; then `claude --resume` and `claude --continue`, and on macOS and Linux `codex resume`, see conversations from every account that shares history.
 - Never shared: sign-ins, Claude Code's `.claude.json` (including `claude mcp add` servers) and the state it keeps for one account or org (policy limits, remote managed settings, the MCP sign-in cache, the background daemon with its scheduled tasks and Remote Control folders, which a profile sets up on its own), and Codex's auth.json, app-server daemon, memories and its databases other than the thread store (which merged sessions share on macOS and Linux).

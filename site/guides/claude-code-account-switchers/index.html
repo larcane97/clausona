@@ -27,7 +27,7 @@
     "headline": "Claude Code account switchers compared",
     "description": "Claude Code and Codex CLI account switchers compared from their own docs: claude-swap, ccam, aisw, codex-auth, clausona and more, by what you need.",
     "datePublished": "2026-11-09",
-    "dateModified": "2026-11-09",
+    "dateModified": "2026-11-10",
     "inLanguage": "en",
     "image": "https://larcane97.github.io/clausona/assets/social-preview.png",
     "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
@@ -211,7 +211,7 @@
             <tr><th scope="col">Tool</th><th scope="col">Platforms</th><th scope="col">Install and license</th><th scope="col">Runs in the background</th></tr>
           </thead>
           <tbody>
-            <tr><th scope="row"><a href="https://github.com/larcane97/clausona">clausona</a></th><td>macOS, Linux, Windows</td><td><code>install.sh</code> or <code>install.ps1</code>, MIT<small>needs Node.js 20 or later</small></td><td>No daemon or proxy<small>a short step records token use after <code>claude</code> exits</small></td></tr>
+            <tr><th scope="row"><a href="https://github.com/larcane97/clausona">clausona</a></th><td>macOS, Linux, Windows</td><td><code>install.sh</code>, <code>install.ps1</code> or npm, MIT<small>needs Node.js 20 or later</small></td><td>No daemon or proxy<small>a short step records token use after <code>claude</code> exits</small></td></tr>
             <tr><th scope="row"><a href="https://github.com/jhyunwoo/ccam">ccam</a></th><td>Linux, macOS, Windows</td><td><code>install.sh</code> or <code>install.ps1</code>, a .deb or <code>go install</code>, MIT<small>one Go binary</small></td><td>Nothing by default<small>with <code>relay</code> or <code>auto_<wbr>switch</code> on, it waits beside the session</small></td></tr>
             <tr><th scope="row"><a href="https://github.com/realiti4/claude-swap">claude-swap</a></th><td>macOS, Linux, Windows</td><td>PyPI, with uv or pipx, MIT<small>Python 3.12 or later</small></td><td>Only what you start<small><code>cswap auto</code>, or the macOS menu bar app</small></td></tr>
             <tr><th scope="row"><a href="https://github.com/Leuconoe/ClaudeCodeMultiAccounts">Claude<wbr>Code<wbr>Multi<wbr>Accounts</a></th><td>Windows, WSL, macOS, Linux</td><td>npm, with <code>npx</code>, MIT<small>Node.js 18 or later</small></td><td>A watcher while a switch waits<small>and a sign-in hook in <code>settings.json</code></small></td></tr>
@@ -283,7 +283,12 @@
             <span class="cmd-label">Windows PowerShell</span>
             <code>irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex</code>
           </div>
+          <div class="cmd" data-copy>
+            <span class="cmd-label">Any OS, with npm</span>
+            <code>npm install -g clausona</code>
+          </div>
         </div>
+        <p class="needs">npm doesn't edit your shell profile. If you install with npm, add the shell hook yourself as shown in the <a href="https://github.com/larcane97/clausona#install">README</a>.</p>
         <p>Ready to set up a second account? Check the guides for <a href="../multiple-claude-code-accounts/">multiple Claude Code accounts</a> or <a href="../multiple-codex-cli-accounts/">multiple Codex CLI accounts</a>.</p>
       </section>
     </article>

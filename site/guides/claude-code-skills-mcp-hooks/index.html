@@ -30,7 +30,7 @@
     "headline": "See which skills, MCP servers and hooks Claude Code loads, and turn them off",
     "description": "See which skills, MCP servers and hooks Claude Code and Codex load in a project, for each account. Turn one off here or everywhere, with a backup and undo.",
     "datePublished": "2026-10-15",
-    "dateModified": "2026-10-15",
+    "dateModified": "2026-11-10",
     "inLanguage": "en",
     "image": "https://larcane97.github.io/clausona/assets/extensions.gif",
     "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
@@ -256,7 +256,12 @@ clausona skills rm old-one --dry-run      <span class="c"># what deleting it wou
             <span class="cmd-label">Windows PowerShell</span>
             <code>irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex</code>
           </div>
+          <div class="cmd" data-copy>
+            <span class="cmd-label">Any OS, with npm</span>
+            <code>npm install -g clausona</code>
+          </div>
         </div>
+        <p class="needs">npm doesn't edit your shell profile. If you install with npm, add the shell hook yourself as shown in the <a href="https://github.com/larcane97/clausona#install">README</a>.</p>
         <p>Not set up for several accounts yet? Start with <a href="../multiple-claude-code-accounts/">multiple Claude Code accounts</a> or <a href="../multiple-codex-cli-accounts/">multiple Codex CLI accounts</a>.</p>
       </section>
     </article>
