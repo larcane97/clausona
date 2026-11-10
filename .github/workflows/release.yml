@@ -55,15 +55,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # The clausona.js just released, published again as the npm package `clausona`. npm's trusted
-  # publishing (OIDC) signs this job in, so no npm token is stored here. That works only once the
-  # package exists on npm and names this workflow as its trusted publisher; docs/releases/README.md
-  # has the one-time steps. Until then this job fails, and continue-on-error keeps the run green:
-  # the GitHub release above is already out and does not depend on it.
+  # publishing (OIDC) signs this job in, so no npm token is stored here: the package names this
+  # workflow as its trusted publisher (see Publishing to npm in docs/releases/README.md). A failure
+  # here turns the run red, though the GitHub release above is already out.
   npm:
-    name: Publish to npm (needs the one-time setup in docs/releases/README.md)
+    name: Publish to npm
     needs: release
     runs-on: ubuntu-latest
-    continue-on-error: true
     permissions:
       contents: read
       id-token: write
@@ -105,10 +103,9 @@ jobs:
           fi
           npm publish --tag latest
 
-      - name: Say why npm was skipped
+      - name: Say what is missing
         if: failure()
         run: >-
           echo "::warning title=Not published to npm::The GitHub release is out; only the npm copy is
-          missing, for the reason the failed step above gives. Until the package exists on npm and
-          names release.yml as its trusted publisher, this is expected: see Publishing to npm in
-          docs/releases/README.md."
+          missing, for the reason the failed step above gives. Fix it and rerun this job: see When the
+          npm job fails in docs/releases/README.md."
