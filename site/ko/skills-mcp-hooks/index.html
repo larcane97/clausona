@@ -31,7 +31,7 @@
     "headline": "Claude Code와 Codex가 불러오는 스킬, MCP 서버, hook 확인하고 끄기",
     "description": "프로젝트에서 Claude Code와 Codex가 불러오는 스킬, MCP 서버, hook을 계정별로 한 화면에서 확인하는 법. 이 프로젝트에서만 끄거나 모든 프로젝트에서 끌 수 있고, 안 쓰는 스킬은 지울 수 있습니다. 바꾸기 전에 백업하므로 되돌릴 수 있습니다.",
     "datePublished": "2026-10-15",
-    "dateModified": "2026-10-15",
+    "dateModified": "2026-11-10",
     "inLanguage": "ko",
     "image": "https://larcane97.github.io/clausona/assets/extensions.gif",
     "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
@@ -259,7 +259,12 @@ clausona skills rm old-one --dry-run      <span class="c"># 지우면 무엇이 
             <span class="cmd-label">Windows PowerShell</span>
             <code>irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex</code>
           </div>
+          <div class="cmd" data-copy>
+            <span class="cmd-label">npm (모든 OS)</span>
+            <code>npm install -g clausona</code>
+          </div>
         </div>
+        <p class="needs">npm은 셸 설정 파일을 고치지 않습니다. npm으로 설치했다면 <a href="https://github.com/larcane97/clausona#install">README</a>에 나온 대로 셸 훅을 직접 추가해야 합니다.</p>
         <p>계정을 아직 나누지 않았다면 <a href="../">계정 가이드</a>부터 보세요.</p>
       </section>
     </article>

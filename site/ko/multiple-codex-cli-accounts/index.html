@@ -31,7 +31,7 @@
     "headline": "Codex CLI 계정 여러 개 쓰는 법: 로그아웃 없이 계정 전환하고 대화 이어가기",
     "description": "Codex CLI 계정마다 CODEX_HOME을 따로 두고 설정은 공유하되, 로그인과 app-server 데몬, 기억, 데이터베이스는 계정마다 따로 두는 방법.",
     "datePublished": "2026-11-09",
-    "dateModified": "2026-11-09",
+    "dateModified": "2026-11-10",
     "inLanguage": "ko",
     "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
     "mainEntityOfPage": "https://larcane97.github.io/clausona/ko/multiple-codex-cli-accounts/",
@@ -214,7 +214,12 @@ CODEX_HOME=~/.codex-work codex login</code></pre>
           <span class="cmd-label">Windows PowerShell</span>
           <code>irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex</code>
         </div>
+        <div class="cmd" data-copy>
+          <span class="cmd-label">npm (모든 OS)</span>
+          <code>npm install -g clausona</code>
+        </div>
       </div>
+      <p class="needs">npm은 셸 설정 파일을 고치지 않습니다. npm으로 설치했다면 <a href="https://github.com/larcane97/clausona#install">README</a>에 나온 대로 셸 훅을 직접 추가해야 합니다.</p>
       <p>평소처럼 Codex에 첫 계정을 로그인해 둔 다음, 아래 명령을 실행합니다.</p>
 <pre data-copy><code>clausona init              <span class="c"># ~/.codex와 이미 로그인된 다른 홈 등록</span>
 clausona add codex:work    <span class="c"># ~/.codex-work를 만들고 Codex 로그인 실행</span>

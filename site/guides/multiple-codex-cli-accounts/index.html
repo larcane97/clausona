@@ -30,7 +30,7 @@
     "headline": "How to use multiple Codex CLI accounts on one machine",
     "description": "Give each Codex CLI account its own CODEX_HOME, share the configuration, and keep the sign-in, the app-server daemon, memories and databases with each account.",
     "datePublished": "2026-10-08",
-    "dateModified": "2026-11-09",
+    "dateModified": "2026-11-10",
     "inLanguage": "en",
     "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
     "mainEntityOfPage": "https://larcane97.github.io/clausona/guides/multiple-codex-cli-accounts/",
@@ -198,7 +198,12 @@ CODEX_HOME=~/.codex-work codex login</code></pre>
           <span class="cmd-label">Windows PowerShell</span>
           <code>irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex</code>
         </div>
+        <div class="cmd" data-copy>
+          <span class="cmd-label">Any OS, with npm</span>
+          <code>npm install -g clausona</code>
+        </div>
       </div>
+      <p class="needs">npm doesn't edit your shell profile. If you install with npm, add the shell hook yourself as shown in the <a href="https://github.com/larcane97/clausona#install">README</a>.</p>
       <p>Sign in to Codex once as usual, then:</p>
 <pre data-copy><code>clausona init              <span class="c"># registers ~/.codex and other homes already signed in</span>
 clausona add codex:work    <span class="c"># makes ~/.codex-work and runs Codex's own login</span>

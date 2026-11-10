@@ -283,7 +283,12 @@ function claude-work {
           <span class="cmd-label">Windows PowerShell</span>
           <code>irm https://github.com/larcane97/clausona/releases/latest/download/install.ps1 | iex</code>
         </div>
+        <div class="cmd" data-copy>
+          <span class="cmd-label">Any OS, with npm</span>
+          <code>npm install -g clausona</code>
+        </div>
       </div>
+      <p class="needs">npm doesn't edit your shell profile. If you install with npm, add the shell hook yourself as shown in the <a href="https://github.com/larcane97/clausona#install">README</a>.</p>
       <p>Then register the account you're signed in to, and add the others:</p>
 <pre data-copy><code>clausona init              <span class="c"># registers the accounts already signed in</span>
 clausona add claude:work   <span class="c"># makes ~/.claude-work and opens Claude Code's sign-in</span>
