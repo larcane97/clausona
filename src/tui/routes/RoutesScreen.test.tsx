@@ -289,6 +289,66 @@ describe("RoutesScreen", () => {
     expect(row(detail, "claude:side")).toMatch(/^claude:side\s.*88%.*40%\s+over 80%$/);
   });
 
+  // A plan with no 5-hour limit (a verified Claude Ultra plan) says `none` under 5H, where a dash
+  // is a reading there is not; with no member that has a 5-hour window, there is no 5H column.
+  it("says none under 5H for a plan with no 5-hour limit, and leaves 5H out when nobody has one", async () => {
+    const ultra = (seven: number): QuotaSnapshot => ({
+      state: "ok",
+      fetchedAt: NOW,
+      sessionLimit: false,
+      weekly: { usedPercent: seven, resetsAt: null },
+    });
+    // Side by side at 120, the detail under the list at 80.
+    const detailAt = (frame: string, columns: number) =>
+      columns >= 100 ? panes(frame).detail : lines(frame).map((line) => line.trim());
+    const allUltra = { "claude:team": ultra(22), "claude:work": ultra(34), "claude:side": ultra(90) };
+    for (const columns of [80, 120]) {
+      const { instance } = setup({ collect: async () => allUltra, columns });
+      const detail = detailAt(await ranked(instance), columns);
+      expect(row(detail, "ACCOUNT"), `${columns}`).toMatch(/^ACCOUNT\s+7D$/);
+      expect(row(detail, "claude:team")).toMatch(/^▸ claude:team\s.*22%\s+next$/);
+      expect(row(detail, "claude:team")).not.toContain("none");
+      instance.unmount();
+    }
+
+    const mixed = { ...allUltra, "claude:work": snap(12, 34) };
+    for (const columns of [80, 120]) {
+      const { instance } = setup({ collect: async () => mixed, columns });
+      const detail = detailAt(await ranked(instance), columns);
+      expect(row(detail, "ACCOUNT"), `${columns}`).toMatch(/^ACCOUNT\s+5H\s+7D$/);
+      expect(row(detail, "claude:team")).toMatch(/^▸ claude:team\s+none\s.*22%\s+next$/);
+      expect(row(detail, "claude:work")).toMatch(/^claude:work\s.*12%.*34%$/);
+      instance.unmount();
+    }
+  });
+
+  it("names the form's quota columns, and says none there too", async () => {
+    const quotas = {
+      ...QUOTAS,
+      "claude:work": {
+        state: "ok" as const,
+        fetchedAt: NOW,
+        sessionLimit: false,
+        weekly: { usedPercent: 34, resetsAt: null },
+      },
+    };
+    const { instance } = setup({ collect: async () => quotas, columns: 80 });
+    await ranked(instance);
+    await press(instance, "n");
+    const form = await until(instance, (f) => f.includes("New route") && f.includes("claude:work"));
+    const all = lines(form);
+    const first = all.findIndex((line) => /\[x\] claude:/.test(line));
+    const team = all.findIndex((line) => line.includes("claude:team"));
+    // Over the accounts, under the every-account row.
+    expect(all[first - 1]).toMatch(/^\s*│\s+5H\s+7D\s+│$/);
+    expect(all[first - 2]).toContain("every account (*)");
+    expect(all[team]).toMatch(/\[x\] claude:team\s+5%\s+22%/);
+    expect(form).toMatch(/\[x\] claude:work\s+none\s+34%/);
+    // Right-aligned over their columns, as the numbers are.
+    expect(all[first - 1].indexOf("5H")).toBe(all[team].indexOf("5%"));
+    expect(all[first - 1].indexOf("7D")).toBe(all[team].indexOf("22%") + 1);
+  });
+
   it("explains routes, the route n would make, and n, in one column when there are none", async () => {
     for (const columns of [80, 120]) {
       const { instance } = setup({ file: { version: 1, routes: {} }, columns });
@@ -302,7 +362,7 @@ describe("RoutesScreen", () => {
         "A new route, unless you change it:",
         "Accounts  all 5 Claude accounts",
         "Order     the next one in turn",
-        "Skip at   80% of the 5-hour or weekly limit",
+        "Skip at   80% of each limit the plan has, 5-hour or weekly",
         "Press n to create one.",
       ]);
       instance.unmount();
@@ -1001,7 +1061,11 @@ describe("API profiles and their budgets", () => {
     await press(instance, TAB);
     const row = lines(text(instance)).findIndex((line) => line.includes("claude:gw"));
     const first = lines(text(instance)).findIndex((line) => line.includes("every account (*)"));
-    for (let step = 0; step < row - first; step++) await press(instance, DOWN);
+    // One step for each account's row down to it: the header over them is no row of the list.
+    const steps = lines(text(instance))
+      .slice(first + 1, row + 1)
+      .filter((line) => /\[[ x]\] /.test(line)).length;
+    for (let step = 0; step < steps; step++) await press(instance, DOWN);
     await press(instance, SPACE);
     await type(instance, ENTER);
 

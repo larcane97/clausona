@@ -46,6 +46,7 @@ import {
   describeOtherAccount,
   describeUnconfirmedCredential,
   describeUnverifiedLogin,
+  listItemJson,
   renderDoctor,
   renderDoctorRoutes,
   renderList,
@@ -668,6 +669,12 @@ function subcommandHelpText(command: string, args: string[] = []): string | unde
         `    ${accent("--no-quota".padEnd(14))}${dim("Skip the plan-quota lookup (no network access)")}`,
         `    ${accent("--no-renew".padEnd(14))}${dim("Never renew a lapsed token; report it as expired")}`,
         "",
+        `  ${bold("QUOTA")}`,
+        `    ${dim("5H and 7D are the 5-hour and weekly windows, each with how long until it resets.")}`,
+        `    ${dim("none under 5H: the plan has no 5-hour limit. A dash: there is no reading. The 5H")}`,
+        `    ${dim("column is left out when no account has a 5-hour limit. --json says it per profile")}`,
+        `    ${dim("as quota.sessionLimit: true, false, or null when no reading says.")}`,
+        "",
         `  ${bold("API PROFILES")}`,
         `    ${dim("ACCOUNT shows the profile's label rather than an account email, and the 5H")}`,
         `    ${dim("and 7D columns show a dash: an API endpoint bills per token and has no")}`,
@@ -999,13 +1006,16 @@ function subcommandHelpText(command: string, args: string[] = []): string | unde
         `    ${dim("Without a terminal, an unknown --route exits 1 and creates nothing.")}`,
         `    ${dim("On a route over claude and codex, name the tool before its arguments: clausona run codex --route any …")}`,
         `    ${dim("Resumed runs (-c, --resume, --from-pr, codex resume) use only accounts that share sessions.")}`,
-        `    ${dim("An account's usage is the higher of its 5H and 7D windows. When the tool's arguments name a")}`,
-        `    ${dim("model (claude --model opus, codex -m …), the account's limit on that model counts too;")}`,
-        `    ${dim("without one, no model's limit counts. An API profile in a route counts its spend against its")}`,
-        `    ${dim("limit (clausona route budget); it is billed per use, and the note says so.")}`,
+        `    ${dim("An account's usage is the higher of its 5H and 7D windows, or its 7D alone on a plan with")}`,
+        `    ${dim("no 5-hour limit. When the tool's arguments name a model (claude --model opus, codex -m …),")}`,
+        `    ${dim("the account's limit on that model counts too; without one, no model's limit counts. An API")}`,
+        `    ${dim("profile in a route counts its spend against its limit (clausona route budget); it is billed")}`,
+        `    ${dim("per use, and the note says so.")}`,
         `    ${dim("With --wait, a run that finds nobody free says on stderr until when it waits, reads quota")}`,
         `    ${dim("again at least every 30 minutes, and runs once an account is free. A reset past the cap, or")}`,
-        `    ${dim("none known, exits 75 at once. Give the cap after =: --wait=2h.")}`,
+        `    ${dim("none known, exits 75 at once. A bare --wait gives up when nothing comes free within 5 hours,")}`,
+        `    ${dim("as is usual on plans with only a weekly limit; the message then names the --wait that")}`,
+        `    ${dim("reaches the soonest reset, such as --wait=52h. Give the cap after =: --wait=2h.")}`,
         "",
         `  ${bold("EXIT CODES")}`,
         `    ${dim("the tool's own, 1 for a usage or routes.json error, 75 when no account is available now,")}`,
@@ -1195,7 +1205,7 @@ export async function runCommand(command: string, args: string[]) {
         const problem = await registryProblem();
         if (problem) throw new Error(problem);
       }
-      return jsonFlag(args) ? JSON.stringify(items, null, 2) : renderList(items);
+      return jsonFlag(args) ? JSON.stringify(items.map(listItemJson), null, 2) : renderList(items);
     }
 
     case "current": {

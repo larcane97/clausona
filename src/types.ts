@@ -82,6 +82,13 @@ export type SpendReading = {
 export type QuotaWindows = {
   /** Short rolling window: Claude's 5-hour session, Codex's sub-day window. */
   session?: QuotaWindow;
+  /**
+   * Whether the plan has that short window at all, as the reading says. `false`: it has none, so
+   * no `session` is no failure to read one (a verified Claude Ultra plan, a Codex plan with only a
+   * weekly limit). `true`: it has one, `session` its reading when there is one. Absent: the
+   * reading does not say, as a reading an older clausona cached does not.
+   */
+  sessionLimit?: boolean;
   /** Seven-day window. */
   weekly?: QuotaWindow;
   /** Most-consumed window of the model-scoped limits, when the tool reports one. */

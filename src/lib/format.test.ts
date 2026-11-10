@@ -22,6 +22,7 @@ import {
   formatResetIn,
   formatResetShort,
   LIST_MIN_WIDTH,
+  listItemJson,
   offersRepair,
   pickLayout,
   quotaBar,
@@ -311,10 +312,11 @@ describe("renderList width", () => {
   });
 
   it("drops the codex footnote once no spend column is left to explain", () => {
+    // A plan with a 5-hour window, so the table has both quota columns.
     const codex = {
       ...item("cdx"),
       tool: "codex" as const,
-      quota: snapshot({ weekly: { usedPercent: 3, resetsAt: null } }),
+      quota: snapshot({ session: { usedPercent: 1, resetsAt: null }, weekly: { usedPercent: 3, resetsAt: null } }),
     };
 
     expect(stripAnsi(renderList([codex], { width: 200 }))).toContain("not available for codex");
@@ -692,7 +694,11 @@ describe("renderList with another account's sign-in", () => {
     month: zero,
     total: zero,
   });
-  const live = row("claude:work", snapshot({ weekly: { usedPercent: 41, resetsAt: null } }));
+  // A plan with a 5-hour window, so the table has both quota columns.
+  const live = row(
+    "claude:work",
+    snapshot({ session: { usedPercent: 6, resetsAt: null }, weekly: { usedPercent: 41, resetsAt: null } }),
+  );
   const other = row("claude:home", snapshot({ state: "other_account", signedInAs: "work@example.com" }));
 
   const render = (items: ProfileListItem[], width = 120) => stripAnsi(renderList(items, { width }));
@@ -712,6 +718,104 @@ describe("renderList with another account's sign-in", () => {
 
     expect(line).toContain("other account");
     expect(line.length).toBeLessThanOrEqual(LIST_MIN_WIDTH);
+  });
+});
+
+/**
+ * A plan with no 5-hour limit (a verified Claude Ultra plan, a Codex plan with only a weekly one)
+ * says `none` under 5H, where a dash is a reading there is not; a table where no account has a
+ * 5-hour window leaves the 5H column out.
+ */
+describe("renderList and plans with no 5-hour limit", () => {
+  const zero = { cost: 0, inputTokens: 0, outputTokens: 0 };
+  const row = (name: string, quota: QuotaSnapshot, extra: Partial<ProfileListItem> = {}): ProfileListItem => ({
+    name,
+    tool: "claude",
+    email: `${name.replace("claude:", "")}@example.com`,
+    configDir: `/home/u/.${name}`,
+    isPrimary: false,
+    isActive: false,
+    quota,
+    today: zero,
+    week: zero,
+    month: zero,
+    total: zero,
+    ...extra,
+  });
+  const weekly = (usedPercent: number) => ({ usedPercent, resetsAt: null });
+  const ultra = row("claude:ultra", snapshot({ sessionLimit: false, weekly: weekly(30) }));
+  const ultra2 = row("claude:ultra2", snapshot({ sessionLimit: false, weekly: weekly(55) }));
+  const pro = row(
+    "claude:pro",
+    snapshot({ sessionLimit: true, session: { usedPercent: 12, resetsAt: null }, weekly: weekly(40) }),
+  );
+  // A reading an older clausona cached, or a tool that does not say.
+  const unknown = row("claude:old", snapshot({ weekly: weekly(20) }));
+
+  const render = (items: ProfileListItem[], width = 120) => stripAnsi(renderList(items, { width }));
+  const lines = (out: string) => out.split("\n");
+  const rowFor = (out: string, name: string) => lines(out).find((line) => line.includes(name)) ?? "";
+
+  it("says in list --json whether each plan has a 5-hour limit, null when no reading says", () => {
+    const json = (item: ProfileListItem) =>
+      JSON.parse(JSON.stringify(listItemJson(item))) as { quota?: Record<string, unknown> };
+
+    expect(json(ultra).quota).toEqual({ state: "ok", fetchedAt: 0, sessionLimit: false, weekly: weekly(30) });
+    expect(json(pro).quota?.sessionLimit).toBe(true);
+    expect(json(unknown).quota?.sessionLimit).toBeNull();
+    // Without a quota read (--no-quota), there is no quota to say it in.
+    expect(json({ ...ultra, quota: undefined })).not.toHaveProperty("quota");
+  });
+
+  it("leaves the 5H column out when no account has a 5-hour window", () => {
+    const out = render([ultra, ultra2]);
+
+    expect(lines(out)[3]).toMatch(/^ {4}PROFILE\s+ACCOUNT\s+7D\s+COST\s+INPUT\s+OUTPUT\s*$/);
+    expect(rowFor(out, "claude:ultra ")).toMatch(/ultra@example\.com\s+30%\s+—/);
+    expect(out).not.toContain("none");
+  });
+
+  it("brings 5H back for one account that has the window, and says none for the plans without", () => {
+    const out = render([ultra, pro, unknown]);
+
+    expect(lines(out)[3]).toMatch(/^ {4}PROFILE\s+ACCOUNT\s+5H\s+7D\s+COST/);
+    expect(rowFor(out, "claude:pro")).toMatch(/pro@example\.com\s+12%\s+40%/);
+    expect(rowFor(out, "claude:ultra")).toMatch(/ultra@example\.com\s+none\s+30%/);
+    // A reading that does not say is no reading of the window: a dash.
+    expect(rowFor(out, "claude:old")).toMatch(/old@example\.com\s+—\s+20%/);
+  });
+
+  // An API profile's budget and a lapsed sign-in run across the quota columns: with 7D alone,
+  // across it, which widens to hold them, and the columns after it line up.
+  it("runs a budget or a lapsed sign-in across 7D alone, the columns after it lined up", () => {
+    const budget = {
+      usedPercent: 35,
+      resetsAt: new Date(Date.now() + 18.5 * 24 * 3_600_000).toISOString(),
+      spentUsd: 7,
+      limitUsd: 20,
+      source: "budget" as const,
+      per: "month" as const,
+    };
+    const api = row(
+      "claude:glm",
+      { state: "ok", fetchedAt: Date.now(), budget },
+      { kind: "api", email: "", label: "gpu-box" },
+    );
+    const gone = row("claude:gone", snapshot({ state: "missing", sessionLimit: false, weekly: weekly(100) }));
+    const out = render([ultra, api, gone]);
+    const costAt = lines(out)[3].indexOf("COST");
+
+    expect(lines(out)[3]).not.toContain("5H");
+    expect(rowFor(out, "claude:glm")).toMatch(/gpu-box\s+budget 35% 18d\s+—/);
+    expect(rowFor(out, "claude:gone")).toMatch(/gone@example\.com\s+signed out\s+—/);
+    for (const name of ["claude:ultra", "claude:glm", "claude:gone"]) {
+      expect(rowFor(out, name).indexOf("—", costAt - 1), name).toBe(costAt);
+    }
+    // The table, that is: the footnotes under it run as long as they run.
+    for (const width of [LIST_MIN_WIDTH, 70, 80, 100]) {
+      const table = lines(render([ultra, api, gone], width)).slice(3, 8);
+      expect(Math.max(...table.map((line) => line.length)), `${width}`).toBeLessThanOrEqual(width);
+    }
   });
 });
 

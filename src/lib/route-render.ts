@@ -34,6 +34,7 @@ import {
   formatQuotaPercent,
   formatResetIn,
   formatResetShort,
+  NO_SESSION,
   styledQuota,
   wholeQuotaPercent,
 } from "./format.js";
@@ -365,6 +366,15 @@ function percentWidth(rows: Row[], cut: number): number {
 /** A column of windows: 5H, 7D, the limit on the model a run names (`model`), or an API profile's budget. */
 type WindowColumn = UsageWindow | "model" | "budget";
 
+/**
+ * Whether a member has a 5-hour window: a reading of one, or a plan that says it has one. A table
+ * shows its 5H column once a member does, here and on the Routes screen.
+ */
+export const hasFiveHour = (row: Row) => row.fiveHour !== undefined || row.sessionLimit === true;
+
+/** Whether a member's plan has no 5-hour limit: its 5H cell says `none` (NO_SESSION), not a dash. */
+export const noFiveHour = (row: Row) => row.sessionLimit === false && row.fiveHour === undefined;
+
 function windowOf(row: Row, which: WindowColumn): QuotaWindow | undefined {
   if (which === "model") return row.scoped;
   if (which === "budget") return row.budget;
@@ -388,14 +398,15 @@ function quotaColumn(label: string, percent: number, withReset: boolean): Column
 }
 
 /**
- * The 5H and 7D columns, then the model column when a row has a limit on the run's model, and the
- * budget column when an API profile has a spend reading.
+ * The 5H column once a member has a 5-hour window (hasFiveHour), the 7D column, then the model
+ * column when a row has a limit on the run's model, and the budget column when an API profile has
+ * a spend reading.
  */
 function windowColumns(rows: Row[]): Array<[WindowColumn, string]> {
   const model = modelHeader(rows);
   const budget = rows.some((row) => row.budget && !row.skip);
   return [
-    ["5H", "5H"],
+    ...(rows.some(hasFiveHour) ? [["5H", "5H"] as [WindowColumn, string]] : []),
     ["7D", "7D"],
     ...(model ? [["model", model] as [WindowColumn, string]] : []),
     ...(budget ? [["budget", "BUDGET"] as [WindowColumn, string]] : []),
@@ -406,7 +417,8 @@ function windowColumns(rows: Row[]): Array<[WindowColumn, string]> {
  * One window of a row, as `csn list` shows it: the percentage in its severity colour, then when
  * the window resets, dimmed. The window that sets the row's usage is bold. A window under the
  * route's cut never reads as the cut (wholeQuotaPercent). A model limit's cell is the higher of
- * its windows, and says which (`5H`, `7D`) where the tool gives their lengths.
+ * its windows, and says which (`5H`, `7D`) where the tool gives their lengths. A plan with no
+ * 5-hour limit says `none` under 5H, where no reading is a dash.
  */
 function quotaCell(
   row: Row,
@@ -417,6 +429,7 @@ function quotaCell(
   cut: number,
 ): Cell {
   const window = windowOf(row, which);
+  if (which === "5H" && !row.skip && noFiveHour(row)) return [[NO_SESSION, dim]];
   if (!window || row.skip) return [["—", dim]];
   const percent = formatQuotaPercent(window, cut);
   const styled = styledQuota(window, row.usage?.stale ? "error" : "ok", cut);
@@ -496,7 +509,8 @@ export function renderNothingToCreate(
 const ROUTE_IS = [
   "A route is a set of accounts for clausona run --route <name>.",
   "It picks one for each run: by default the next in turn,",
-  `skipping any account once its 5-hour or weekly use reaches ${DEFAULT_MAX_USAGE}%.`,
+  `skipping any account once its 5-hour or weekly use reaches ${DEFAULT_MAX_USAGE}%`,
+  "(its weekly use alone on a plan with no 5-hour limit).",
 ] as const;
 
 export function renderRoutesEmpty(): string {
@@ -1214,9 +1228,9 @@ const resetOrder = (at: string | null) => (at === null ? Number.MAX_SAFE_INTEGER
 
 /**
  * Which of a row's windows at or above `limit` resets at `at` (blockingReset's answer): `7D`, the
- * limit on the run's model by scopedWindowName, or `5H`.
+ * limit on the run's model by scopedWindowName, `budget` or `5H`; none when no window does.
  */
-export function resettingWindow(row: Row, limit: number, at: string): string {
+export function resettingWindow(row: Row, limit: number, at: string): string | undefined {
   const ms = Date.parse(at);
   const resetsThen = (window: QuotaWindow | undefined) =>
     window !== undefined &&
@@ -1227,17 +1241,22 @@ export function resettingWindow(row: Row, limit: number, at: string): string {
   const scoped = (row.scopedWindows ?? [row.scoped]).find(resetsThen);
   if (scoped) return scopedWindowName(scoped);
   if (resetsThen(row.budget)) return BUDGET_WINDOW;
-  return "5H";
+  if (resetsThen(row.fiveHour)) return "5H";
+  return undefined;
 }
 
 /** When every window at or above `limit` will have reset, and which window that is. */
 function freeAgainCell(row: Row, limit: number, at: string | null, now: number, withWindow: boolean): Cell {
   if (!at) return [["—", dim]];
-  const why = withWindow ? ` (${resettingWindow(row, limit, at)} resets)` : "";
+  const window = withWindow ? resettingWindow(row, limit, at) : undefined;
+  const why = window ? ` (${window} resets)` : "";
   return [[`${resetsIn(at, now)}${why}`, secondary]];
 }
 
-/** The `--wait` that reaches a reset at `at`: the bare one within its 5h, else one of whole hours. */
+/**
+ * The `--wait` that reaches a reset at `at`: the bare one within its 5h, else one of whole hours.
+ * A plan with only a weekly limit is often held back for days, past what a bare `--wait` waits.
+ */
 function waitReaching(at: string, now: number): string {
   const ms = Date.parse(at) - now;
   return ms <= DEFAULT_WAIT_MS ? "--wait" : `--wait=${Math.ceil(ms / 3_600_000)}h`;
@@ -1509,6 +1528,7 @@ export function explainJson(name: string | undefined, resolvedBy: ResolvedBy, ra
       skipReason: row.skip ?? null,
       usage: usageJson(row.usage),
       fiveHour: windowJson(row.fiveHour),
+      sessionLimit: row.sessionLimit ?? null,
       sevenDay: windowJson(row.sevenDay),
       scoped: scopedJson(row.scoped),
       budget: budgetJson(row.budget),

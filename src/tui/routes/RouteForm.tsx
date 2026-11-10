@@ -24,6 +24,7 @@ import { color } from "../theme.js";
 import { textLines, useTerminalSize } from "../use-width.js";
 import {
   AccountRows,
+  accountRowLines,
   ErrorLines,
   errorLineCount,
   FallbackEntries,
@@ -565,7 +566,7 @@ export function RouteForm(props: RouteFormProps) {
     hintSets,
     (shown) => (rows ?? 0) - SPARE_ROWS - chromeRows({ question, footer, hints: shown }, columns) - FRAME_LINES - extra,
     // The cursor's row stays while it can move: not while a question or the save has the keys.
-    { count: listed.length, cursor: typing && focusOn("accounts") && state.cursor > 0 },
+    { count: accountRowLines(listed.length), cursor: typing && focusOn("accounts") && state.cursor > 0 },
   );
 
   function textField(field: TextField, placeholder?: string) {

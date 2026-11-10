@@ -164,6 +164,61 @@ describe("parseClaudeQuota", () => {
     expect(quota?.scoped?.label).toBe("Fable");
   });
 
+  it("says the account has a 5-hour limit when limits[] lists a session entry", () => {
+    expect(parseClaudeQuota(CLAUDE_PAYLOAD)?.sessionLimit).toBe(true);
+  });
+
+  // A verified Ultra account, as read live on 2026-11-01: `five_hour` is null and limits[] lists
+  // only the weekly limits. No 5-hour limit, which is not a 5-hour reading that failed.
+  it("says a plan has no 5-hour limit when limits[] lists none, its week read as ever", () => {
+    const quota = parseClaudeQuota({
+      ...CLAUDE_PAYLOAD,
+      five_hour: null,
+      limits: CLAUDE_PAYLOAD.limits.filter((limit) => limit.kind !== "session"),
+    });
+
+    expect(quota?.session).toBeUndefined();
+    expect(quota?.sessionLimit).toBe(false);
+    expect(quota?.weekly).toEqual({ usedPercent: 45, resetsAt: "2026-09-04T19:59:59.919Z" });
+    expect(quota?.scoped?.label).toBe("Fable");
+  });
+
+  it("reads the session entry of limits[] when five_hour is null on an account that has the limit", () => {
+    const quota = parseClaudeQuota({ ...CLAUDE_PAYLOAD, five_hour: null });
+
+    expect(quota?.session).toEqual({ usedPercent: 1, resetsAt: "2026-09-04T02:19:59.000Z" });
+    expect(quota?.sessionLimit).toBe(true);
+
+    // A session entry with no number: the limit is there, with no reading of it.
+    const unread = parseClaudeQuota({
+      ...CLAUDE_PAYLOAD,
+      five_hour: null,
+      limits: CLAUDE_PAYLOAD.limits.map((limit) => (limit.kind === "session" ? { ...limit, percent: null } : limit)),
+    });
+    expect(unread?.session).toBeUndefined();
+    expect(unread?.sessionLimit).toBe(true);
+  });
+
+  it("says nothing of a 5-hour limit without limits[], and reads five_hour as before", () => {
+    const { limits: _limits, ...withoutLimits } = CLAUDE_PAYLOAD;
+
+    const none = parseClaudeQuota({ ...withoutLimits, five_hour: null });
+    expect(none?.session).toBeUndefined();
+    expect(none).not.toHaveProperty("sessionLimit");
+    expect(none?.weekly?.usedPercent).toBe(45);
+
+    // A list with no entry of a kind says nothing either.
+    expect(parseClaudeQuota({ ...withoutLimits, five_hour: null, limits: [] })).not.toHaveProperty("sessionLimit");
+    expect(parseClaudeQuota({ ...withoutLimits, five_hour: null, limits: [{}, null] })).not.toHaveProperty(
+      "sessionLimit",
+    );
+
+    // A 5-hour reading is a 5-hour limit, list or none.
+    const read = parseClaudeQuota(withoutLimits);
+    expect(read?.session?.usedPercent).toBe(1);
+    expect(read?.sessionLimit).toBe(true);
+  });
+
   it("omits windows the account does not have", () => {
     const quota = parseClaudeQuota({ five_hour: { utilization: 3, resets_at: null }, seven_day: null, limits: null });
 
@@ -204,6 +259,21 @@ describe("parseCodexQuota", () => {
 
     expect(quota?.session?.usedPercent).toBe(8);
     expect(quota?.weekly?.usedPercent).toBe(55);
+    expect(quota?.sessionLimit).toBe(true);
+  });
+
+  // A plan with only a weekly limit (pro, prolite) has it as primary, and secondary null.
+  it("says a plan has no short window when its weekly one comes alone, secondary null", () => {
+    const quota = parseCodexQuota(CODEX_PAYLOAD);
+
+    expect(quota?.session).toBeUndefined();
+    expect(quota?.sessionLimit).toBe(false);
+  });
+
+  it("says nothing of a short window when the payload does not say secondary is null", () => {
+    const { secondary_window: _secondary, ...primaryOnly } = CODEX_PAYLOAD.rate_limit;
+
+    expect(parseCodexQuota({ ...CODEX_PAYLOAD, rate_limit: primaryOnly })).not.toHaveProperty("sessionLimit");
   });
 
   it("surfaces the highest additional rate limit as the scoped window", () => {

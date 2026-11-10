@@ -10,6 +10,7 @@ import {
   formatAge,
   formatCurrency,
   localTimezoneLabel,
+  noSessionLimit,
 } from "../../lib/format.js";
 import { displayName, isEnvMap } from "../../lib/profile-env.js";
 import { describeSecretSource } from "../../lib/redact.js";
@@ -113,7 +114,12 @@ function quotaRows(quota: QuotaSnapshot | undefined, width: number): ReactElemen
   const live = quota.state === "ok";
   const hasWindows = Boolean(quota.session ?? quota.weekly ?? quota.scoped);
   return [
-    <QuotaRow key="session" label="Session" window={quota.session} live={live} width={width} />,
+    // A plan with no 5-hour limit says so: a dash is a reading there is not.
+    noSessionLimit(quota) ? (
+      <Row key="session" label="Session" value="no 5-hour limit" valueColor={color.muted} />
+    ) : (
+      <QuotaRow key="session" label="Session" window={quota.session} live={live} width={width} />
+    ),
     <QuotaRow key="weekly" label="Weekly" window={quota.weekly} live={live} width={width} />,
     ...(quota.scoped
       ? [

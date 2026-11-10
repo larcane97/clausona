@@ -322,6 +322,20 @@ describe("ProfilePreview quota", () => {
     expect(frame).toMatch(/Signed in as\s+b@example\.com/);
     expect(frame).toContain("another account — clausona login");
   });
+
+  // A dash under Session is a reading there is not; a plan without the window says so.
+  it("says a plan has no 5-hour limit, where a reading it does not say is a dash", () => {
+    const weekly = { usedPercent: 30, resetsAt: null };
+    const none = panelFor({
+      ...subscription,
+      quota: { state: "ok", fetchedAt: Date.now(), sessionLimit: false, weekly },
+    });
+    expect(none).toMatch(/Session\s+no 5-hour limit/);
+    expect(none).toMatch(/Weekly\s+.*30%/);
+
+    const unknown = panelFor({ ...subscription, quota: { state: "ok", fetchedAt: Date.now(), weekly } });
+    expect(unknown).toMatch(/Session\s+—/);
+  });
 });
 
 /**

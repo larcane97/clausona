@@ -31,6 +31,12 @@ describe("QuotaCell", () => {
     expect(frame(<QuotaCell live width={10} />)).toBe("—");
   });
 
+  it("says none, not a dash, for a plan with no 5-hour limit", () => {
+    expect(frame(<QuotaCell live width={4} none />)).toBe("none");
+    // A reading wins: a plan that has the window shows it.
+    expect(frame(<QuotaCell window={at(42)} live width={4} none />)).toBe(" 42%");
+  });
+
   it("fits the reading to its width, the percentage last to go", () => {
     expect(frame(<QuotaCell window={at(42)} live width={20} />)).toMatch(/^\S+ {2}42%$/);
     expect(frame(<QuotaCell window={at(42)} live width={4} />)).toBe(" 42%");

@@ -1,5 +1,5 @@
 import { Text } from "ink";
-import { fitQuotaValue } from "../../lib/format.js";
+import { fitQuotaValue, NO_SESSION } from "../../lib/format.js";
 import type { QuotaWindow } from "../../types.js";
 import { color } from "../theme.js";
 
@@ -23,7 +23,8 @@ export function quotaColor(window: QuotaWindow, live: boolean): string {
 /**
  * One quota window cut to `width` by what it drops (`fitQuotaValue`), or a muted dash. `cut` is a
  * route's, on the routes screens: a reading under it never reads as it. Without one, the reading
- * is rounded as everywhere else.
+ * is rounded as everywhere else. `none` is a 5H cell's on a plan with no 5-hour limit, which says
+ * so, muted, where no reading is a dash.
  */
 export function QuotaCell({
   window,
@@ -31,17 +32,19 @@ export function QuotaCell({
   width,
   bold,
   cut,
+  none = false,
 }: {
   window?: QuotaWindow;
   live: boolean;
   width: number;
   bold?: boolean;
   cut?: number;
+  none?: boolean;
 }) {
   if (!window) {
     return (
       <Text color={color.muted} bold={bold} wrap="truncate-end">
-        {EM_DASH}
+        {none ? NO_SESSION : EM_DASH}
       </Text>
     );
   }

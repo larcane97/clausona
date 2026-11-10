@@ -425,6 +425,52 @@ describe("stages", () => {
     expect(rank({}, fullOrOut).outcome).toEqual({ kind: "none", soonest: { id: "claude:a", at: inHours(5) } });
   });
 
+  // A Pro account with a 5-hour window beside a verified Ultra one with none: the Pro one counts
+  // the higher of its two windows, the Ultra one its week alone, and neither reads the other's way.
+  describe("a route of plans with and without a 5-hour limit", () => {
+    const ultra = (seven: number) => snap(undefined, seven, { sessionLimit: false });
+    const pro = (five: number, seven: number) => snap(five, seven, { sessionLimit: true });
+
+    it("headroom weighs a Pro account's high 5H against an Ultra account's 7D", () => {
+      const ranking = rank(
+        { from: ["a", "b"], strategy: "headroom" },
+        { "claude:a": pro(70, 10), "claude:b": ultra(40) },
+      );
+      expect(ranking.outcome).toMatchObject({ kind: "picked", id: "claude:b", stage: "pool" });
+      const row = (id: string) => ranking.rows.find((each) => each.id === id);
+      expect(row("claude:a")?.usage).toEqual({ percent: 70, window: "5H", stale: false });
+      expect(row("claude:b")?.usage).toEqual({ percent: 40, window: "7D", stale: false });
+      expect([row("claude:a")?.sessionLimit, row("claude:b")?.sessionLimit]).toEqual([true, false]);
+      expect(row("claude:b")?.fiveHour).toBeUndefined();
+
+      // The Pro account's 5-hour window resets: its week is what is left, and it has more room.
+      const reset = rank({ from: ["a", "b"], strategy: "headroom" }, { "claude:a": pro(5, 10), "claude:b": ultra(40) });
+      expect(reset.outcome).toMatchObject({ kind: "picked", id: "claude:a" });
+    });
+
+    it("overflow takes the one with the most left, by 5H or by 7D alone", () => {
+      const quotas = { "claude:a": pro(95, 20), "claude:b": ultra(85) };
+      expect(rank({ from: ["a", "b"], strategy: "headroom" }, quotas).outcome).toEqual({
+        kind: "picked",
+        id: "claude:b",
+        stage: "overflow",
+        reason: "most room left (none under 80%)",
+      });
+      const nearlyFull = { "claude:a": pro(82, 20), "claude:b": ultra(99) };
+      expect(rank({ from: ["a", "b"], strategy: "headroom" }, nearlyFull).outcome).toMatchObject({
+        id: "claude:a",
+        stage: "overflow",
+      });
+    });
+
+    it("waits for an Ultra account's week, which no 5-hour reset frees", () => {
+      const quotas = { "claude:a": pro(100, 30), "claude:b": ultra(100) };
+      const ranking = rank({ from: ["a", "b"] }, quotas);
+      expect(ranking.outcome).toEqual({ kind: "none", soonest: { id: "claude:a", at: inHours(2) } });
+      expect(blockingReset(ranking.rows[1], 100)).toBe(inHours(96));
+    });
+  });
+
   it("ranks a member listed in both the pool and the fallback once, in the pool", () => {
     const ranking = rank(
       { from: ["*"], fallback: ["b"] },
