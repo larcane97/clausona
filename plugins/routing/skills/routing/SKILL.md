@@ -20,7 +20,8 @@ the help.) A user who would rather look through routes on that screen can run it
 ## What decides the pick
 
 - An account's **usage** is the higher of its 5H and 7D windows: 0% 5H with 99% 7D is 99%.
-  That number, and nothing else, is ranked and shown.
+  On a plan with no 5-hour limit (a verified Claude Ultra plan, some Codex plans), whose 5H
+  shows `none`, it is the 7D alone. That number, and nothing else, is ranked and shown.
 - When the tool's arguments name a model (`claude --model opus`, `codex -m gpt-5.3-codex-spark`,
   also after `exec`), the account's limit on that model joins the max: Claude's is weekly, and a
   Codex one can have a 5-hour and a weekly window, of which the higher counts (named in the note
@@ -74,7 +75,9 @@ clausona route budget --json               # every API profile: its limit, whose
   `signed-out`, `expired`, `other-account` (its stored sign-in is another account's),
   `no-reading`, `not-registered`, `keeps-own-sessions`, or for an API profile `no-spend-limit`,
   `spend-not-reported` or `spend-unread`. Each also has `usage`,
-  `fiveHour`, `sevenDay` and `lastPickedAt`, `scoped` (`{"label", "usedPercent", "resetsAt"}`,
+  `fiveHour`, `sessionLimit` (`false` on a plan with no 5-hour limit, whose `fiveHour` is then
+  null; `true` when it has one; null when no reading says, as for an API profile), `sevenDay` and
+  `lastPickedAt`, `scoped` (`{"label", "usedPercent", "resetsAt"}`,
   its limit on the `--model` model, of a Codex limit with two windows the higher, or null) and
   `budget` (an API profile's `{"usedPercent", "spentUsd", "limitUsd", "source", "per",
   "resetsAt"}`, or null). `usage.window` is `5H`, `7D`, the name of that limit (its label for
@@ -197,8 +200,9 @@ id=$(clausona route pick <name> --wait=1h --model opus)          # an orchestrat
   least every 30 minutes, and then ranks again. stderr says `waiting until 14:05 for claude:work
   (5H resets) …`; stdout stays the tool's, or `pick`'s id or JSON.
 - If the soonest reset is past the cap, or no reset time is known, it exits 75 at once, and the
-  message says the cap that would reach it (`--wait=48h`). Ctrl-C exits 130; nothing is launched
-  or recorded.
+  message says the cap that would reach it (`--wait=48h`). When every account has only a weekly
+  limit, the soonest reset is often days away, past a bare `--wait`'s 5h. Ctrl-C exits 130;
+  nothing is launched or recorded.
 - Several waits that wake together take different accounts, as picks always do.
 - Your own shell tool call times out long before a wait of hours ends. Use `--wait` in a script,
   in cron, or in a command you give the user; from your shell, only with a cap shorter than your

@@ -30,7 +30,7 @@
     "headline": "How to use multiple Claude Code accounts on one machine",
     "description": "Switch Claude Code accounts without logging out and keep the same conversation with claude --continue. Your skills, hooks and settings stay shared.",
     "datePublished": "2026-10-08",
-    "dateModified": "2026-11-09",
+    "dateModified": "2026-11-10",
     "inLanguage": "en",
     "author": { "@type": "Person", "name": "larcane97", "url": "https://github.com/larcane97" },
     "mainEntityOfPage": "https://larcane97.github.io/clausona/guides/multiple-claude-code-accounts/",
@@ -318,8 +318,8 @@ csn use claude:default     <span class="c"># back to the first account; init nam
 <pre><code>PROFILE             ACCOUNT              5H         7D
 claude:work         dev@example.com      62% 1h     41% 3d
 claude:personal     me@example.org       8%         77% 5d
-claude:team         team@example.com     —          30% 4d</code></pre>
-      <p>Verified Ultra plans don't have a 5-hour limit, so the 5H column shows a dash, like <code>claude:team</code> here.</p>
+claude:team         team@example.com     none       30% 4d</code></pre>
+      <p>Verified Ultra plans don't have a 5-hour limit, so the 5H column shows <code>none</code>, like <code>claude:team</code> here.</p>
       <p>Running <code>csn</code> with no arguments opens a dashboard with the same readings and the exact reset times.</p>
 
       <h2 id="routing">Optimize usage across multiple accounts with dynamic routing</h2>
