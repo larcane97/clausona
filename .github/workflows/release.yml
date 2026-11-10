@@ -11,13 +11,13 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 9
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: pnpm
@@ -68,13 +68,16 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      # Trusted publishing needs Node 22.14 or later and npm 11.5.1 or later.
-      - uses: actions/setup-node@v4
+      # Trusted publishing needs Node 22.14 or later and npm 11.5.1 or later. No dependency cache in
+      # a job that holds a publish token: setup-node would cache on its own if package.json ever
+      # named npm as its package manager.
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
       - run: npm install -g npm@^11.5.1 && npm --version
 
       # The release's own asset, checked against its SHA-256 as `clausona update` checks it, so npm
