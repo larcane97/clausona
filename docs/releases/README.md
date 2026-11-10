@@ -44,9 +44,9 @@ refuses a bundle whose `--version` is not the version in `package.json`.
 
 The `npm` job in release.yml signs in to npm with trusted publishing, so no npm token is stored in
 the repository. npm lets a workflow publish only a package that already exists and names that
-workflow as its trusted publisher. So the first version goes up by hand, once. Until the steps
-below are done, the `npm` job fails with a warning that points here, and the run stays green: the
-GitHub release does not depend on it.
+workflow as its trusted publisher. So the first version went up by hand, once: 0.14.0-beta, on
+2026-11-10. 0.14.1-beta was the first version the `npm` job published. The steps below are kept for
+a new package or a trusted publisher that has to be set up again.
 
 ### One-time setup
 
@@ -91,8 +91,9 @@ GitHub release does not depend on it.
 
 ### When the npm job fails
 
-The GitHub release is out either way. Rerun the job from the Actions tab once the cause is
-fixed; it skips a version that is already on npm. Or publish that version by hand as in step 2.
+The release run turns red, but the GitHub release is out either way. Rerun the job from the
+Actions tab once the cause is fixed; it skips a version that is already on npm. Or publish that
+version by hand as in step 2.
 
 A copy installed with npm never replaces itself. `clausona update`, the dashboard's Update and the
 question after commands tell its user to run `npm install -g clausona@latest`.
