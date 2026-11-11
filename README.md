@@ -120,8 +120,9 @@ To remove a copy installed with npm, run `clausona uninstall` first, then `npm u
 **Update** above Profiles; choose it and answer `Y`, and csn restarts on the new version. From a
 script or another shell, `clausona update` does the same (`--yes` skips the question). Other
 commands you run in a terminal, such as `clausona list`, ask after their output:
-`Update now? (Y/n)`. Any key but `y` or Enter, or no answer within ten seconds, and they leave it
-for a week, as they do after a no on the dashboard or to `clausona update`. They learn about a
+`Update now? (Y/n)`. Any key but `y` or Enter, and they leave it for a week, as they do after a
+no on the dashboard or to `clausona update`. With no answer within ten seconds the command
+finishes, and the next one asks again. They learn about a
 release from a check that runs in the background at most once a day, so no command waits for
 GitHub; a yes asks GitHub again first, so it installs the latest release. However you update,
 the download is checked against the release's published SHA-256 before the installed copy is

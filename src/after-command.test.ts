@@ -295,21 +295,26 @@ describe("the update question", () => {
   });
 
   // A shell function or a script run from a terminal (`work() { csn use work && claude; }`) would
-  // otherwise wait on it forever.
-  it("counts no answer in time as a no", async () => {
+  // otherwise wait on it forever. Counted as a no, it held every release off for seven days when
+  // nobody had seen the question.
+  it("stops waiting when no answer comes in time, without counting it as a no, and asks again next time", async () => {
     seed(updateDue);
     const run = setup({ answerMs: 30 });
 
     await askAfterCommand(run.deps);
 
     expect(run.output.plain.split("\n").slice(2)).toEqual([
-      "  Update now? (Y/n) n",
-      "    Skipped. Run clausona update when you're ready.",
+      "  Update now? (Y/n) ",
+      "    No answer. You'll be asked again next time.",
       "",
     ]);
     expect(run.install).not.toHaveBeenCalled();
     expect(run.input.modes).toEqual([true, false]);
-    expect(stored().updateSkippedAt).toBe(at(START));
+    expect(stored().updateSkippedAt).toBeUndefined();
+
+    const next = setup({ answerMs: 30 });
+    await askAfterCommand(next.deps);
+    expect(next.output.plain).toContain("Update now? (Y/n)");
   });
 
   // Raw mode turns the terminal's interrupt keys into input; dropped with the rest of the grace,

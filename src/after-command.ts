@@ -81,7 +81,10 @@ type Writer = { write(chunk: string): unknown };
 
 const ESC = "\u001b";
 
-/** A question nobody answers in this long is a no: a shell function or script run from a terminal waits on it. */
+/**
+ * How long a question waits before the command finishes without an answer: a shell function or
+ * script run from a terminal waits on it.
+ */
 const ANSWER_MS = 10_000;
 /** The check made on a yes, which someone is waiting on: as long as `clausona update` gives it. */
 const YES_CHECK_TIMEOUT_MS = 15_000;
@@ -291,7 +294,13 @@ async function offerUpdate(tag: string, deps: AfterCommandDeps): Promise<void> {
 
   output.write(`${available}  ${dim("Update now? (Y/n)")} `);
   const key = await readKey(deps.input(), { graceMs: deps.graceMs, timeoutMs: deps.answerMs, now: deps.notices.now });
-  const yes = key !== null && YES.has(key);
+  // No answer in time is not a no: nobody may have seen the question, and a no holds it for seven
+  // days, whatever is released meanwhile. So nothing is noted, and the next command asks again.
+  if (key === null) {
+    output.write(`\n${dim("    No answer. You'll be asked again next time.")}\n`);
+    return;
+  }
+  const yes = YES.has(key);
   output.write(`${yes ? "y" : "n"}\n`);
   if (!yes) {
     await skipUpdate(deps.notices);
