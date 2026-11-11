@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { acquireDirLock, type ReleaseDirLock } from "../core/dir-lock.js";
 import { claudeJsonPathForConfigDir, isDefaultClaudeConfigDir, keychainServiceForConfigDir } from "../core/paths.js";
+import { claudePlanName } from "../core/plan.js";
 import { spawnCommand } from "../core/process.js";
 import { parseClaudeQuota, QuotaHttpError } from "../core/quota.js";
 import { writeKeychainItem } from "../lib/secrets.js";
@@ -322,6 +323,17 @@ async function readAccount(configDir: string): Promise<{ email: string; orgName?
     return { email, orgName: parsed.oauthAccount?.organizationName };
   } catch {
     return null;
+  }
+}
+
+/** The plan Claude Code stored with the account in the profile's `.claude.json` (claudePlanName). */
+async function readClaudePlan(configDir: string): Promise<string | undefined> {
+  const jsonPath = claudeJsonPathForConfigDir({ homeDir: homedir(), configDir });
+  try {
+    const parsed = JSON.parse(await readFile(jsonPath, "utf8")) as { oauthAccount?: unknown } | null;
+    return claudePlanName(parsed?.oauthAccount);
+  } catch {
+    return undefined;
   }
 }
 
@@ -874,6 +886,7 @@ export const claudeAdapter: ToolAdapter & Required<Pick<ToolAdapter, "sharedSkip
   defaultConfigDir: (homeDir) => path.join(homeDir, ".claude"),
   configDirPattern: /^\.claude(-.+)?$/,
   readAccountInfo: readAccount,
+  readPlan: readClaudePlan,
   keychainServiceName: keychainServiceForConfigDir,
   keychainAccount: claudeKeychainAccount,
   hasKeychainCredential: hasKeychain,

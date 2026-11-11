@@ -6,11 +6,15 @@
 already spent, so you can pick a profile that still has headroom.
 
 ```
-PROFILE             ACCOUNT                      5H         7D
-claude:work         you@example.com              6% 23m     46% 13h
-claude:personal     you@personal.com             0%         100% 4d
-codex:work          you@example.com              none       12% 5d
+PROFILE             ACCOUNT                      PLAN      5H         7D
+claude:work         you@example.com              Max       6% 23m     46% 13h
+claude:personal     you@personal.com             Pro       0%         100% 4d
+codex:work          you@example.com              Pro Lite  none       12% 5d
 ```
+
+`PLAN` is the account's subscription plan, such as Ultra, Max or Pro for Claude and Plus or Pro
+for Codex. It is read from what Claude Code and Codex store with the sign-in, so it shows with
+`--no-quota` too. An API profile shows `API`, and a dash means no plan is stored for that account.
 
 `5H` is the rolling session window, `7D` the weekly one, each followed by how long
 until it resets. A plan without a 5-hour limit, such as a verified Claude Ultra plan or some
@@ -18,13 +22,16 @@ Codex plans, shows `none` under `5H`, and when no account has a 5-hour limit the
 out. The dashboard shows the same reading with a gauge and the precise
 reset time, plus the most-consumed per-model limit. In `--json`, each profile's
 `quota.sessionLimit` is `true` when its plan has a 5-hour limit, `false` when it has none, and
-`null` when no reading says (an API profile, or a reading an older clausona took).
+`null` when no reading says (an API profile, or a reading an older clausona took). `plan` holds
+the plan's name. It is absent for an API profile, for an account with no plan stored, and for one
+whose stored sign-in is another account's.
 
 The table adapts to the terminal: as it narrows, token counts give way first, then
 cost, then the reset times — the quota columns and the profile name are the last things
 to go, so the row never wraps into itself. A `MODEL` column, shown once any profile pins
 a model, is kept ahead of the token counts and cost but goes before the quota columns or
-their reset times would.
+their reset times would. The `PLAN` column outlasts the token counts, the cost and the reset
+times, and goes only when nothing else is left to drop.
 
 Readings come from each tool's own usage endpoint, authenticated with the credential that
 tool already stored for that profile. For subscription profiles clausona holds no token of

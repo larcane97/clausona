@@ -31,6 +31,7 @@ import {
   renderDoctor,
   renderList,
   renderUsageSummary,
+  shownPlan,
 } from "./format.js";
 
 function snapshot(overrides: Partial<QuotaSnapshot> = {}): QuotaSnapshot {
@@ -814,6 +815,90 @@ describe("renderList and plans with no 5-hour limit", () => {
     // The table, that is: the footnotes under it run as long as they run.
     for (const width of [LIST_MIN_WIDTH, 70, 80, 100]) {
       const table = lines(render([ultra, api, gone], width)).slice(3, 8);
+      expect(Math.max(...table.map((line) => line.length)), `${width}`).toBeLessThanOrEqual(width);
+    }
+  });
+});
+
+describe("renderList with plans", () => {
+  const zero = { cost: 0, inputTokens: 0, outputTokens: 0 };
+  const resetsAt = () => new Date(Date.now() + 3.5 * 3_600_000).toISOString();
+  const windows = () =>
+    snapshot({
+      sessionLimit: true,
+      session: { usedPercent: 12, resetsAt: resetsAt() },
+      weekly: { usedPercent: 40, resetsAt: resetsAt() },
+    });
+  const row = (name: string, extra: Partial<ProfileListItem> = {}): ProfileListItem => ({
+    name,
+    tool: "claude",
+    email: `${name.replace(/^\w+:/, "")}@example.com`,
+    configDir: `/home/u/.${name}`,
+    isPrimary: false,
+    isActive: false,
+    quota: windows(),
+    today: zero,
+    week: zero,
+    month: zero,
+    total: zero,
+    ...extra,
+  });
+  const ultra = row("claude:ultra", { plan: "Ultra" });
+  const max = row("claude:max", { plan: "Max", isActive: true });
+  const unknown = row("claude:old");
+  const plus = row("codex:work", { tool: "codex", plan: "Plus" });
+  const api = row("claude:glm", { kind: "api", email: "", label: "gpu-box", quota: undefined });
+
+  const render = (items: ProfileListItem[], width = 160) => stripAnsi(renderList(items, { width }));
+  const lines = (out: string) => out.split("\n");
+  const rowFor = (out: string, name: string) => lines(out).find((line) => line.includes(name)) ?? "";
+
+  it("names each account's plan after its address, a dash where none is known and API for an API profile", () => {
+    const out = render([ultra, max, unknown, plus, api]);
+
+    expect(lines(out)[3]).toMatch(/^ {4}PROFILE\s+ACCOUNT\s+PLAN\s+5H\s+7D\s+COST/);
+    expect(rowFor(out, "claude:ultra")).toMatch(/ultra@example\.com\s+Ultra\s+12% 3h/);
+    expect(rowFor(out, "claude:max")).toMatch(/max@example\.com\s+Max\s+12%/);
+    expect(rowFor(out, "codex:work")).toMatch(/work@example\.com\s+Plus\s+12%/);
+    expect(rowFor(out, "claude:old")).toMatch(/old@example\.com\s+—\s+12%/);
+    expect(rowFor(out, "claude:glm")).toMatch(/gpu-box\s+API\s+/);
+  });
+
+  it("has no PLAN column until some account has a plan, and none for API profiles alone", () => {
+    expect(lines(render([unknown]))[3]).not.toContain("PLAN");
+    expect(lines(render([unknown, api]))[3]).not.toContain("PLAN");
+    expect(lines(render([unknown, api, ultra]))[3]).toContain("PLAN");
+  });
+
+  it("says no plan for a sign-in that is another account's, in the table and in list --json", () => {
+    const other = row("claude:moved", {
+      plan: "Pro",
+      quota: snapshot({ state: "other_account", signedInAs: "x@example.com" }),
+    });
+    const out = render([ultra, other]);
+
+    expect(rowFor(out, "claude:moved")).toMatch(/moved@example\.com\s+—\s+other account/);
+    expect(shownPlan(other)).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(listItemJson(other)))).not.toHaveProperty("plan");
+    expect(JSON.parse(JSON.stringify(listItemJson(ultra))).plan).toBe("Ultra");
+    // Without a quota read (--no-quota) nothing says whose the sign-in is, so the plan stands.
+    expect(JSON.parse(JSON.stringify(listItemJson({ ...ultra, quota: undefined }))).plan).toBe("Ultra");
+  });
+
+  it("keeps the plan longer than the reset times and spend, and drops it before the narrowest layout", () => {
+    // 80 columns: the plan stays, the reset times have gone.
+    const at80 = render([ultra, max], 80);
+    expect(lines(at80)[3]).toMatch(/PLAN\s+5H\s+7D\s*$/);
+    expect(rowFor(at80, "claude:ultra")).toMatch(/Ultra\s+12%\s+40%\s*$/);
+    // The narrowest layout is the one the table had without a plan column.
+    expect(lines(render([ultra, max], LIST_MIN_WIDTH))[3]).not.toContain("PLAN");
+    expect(pickLayout(true, 20, false, undefined, 7)).toEqual(pickLayout(true, LIST_MIN_WIDTH - 1));
+  });
+
+  it("never emits a table line wider than the terminal", () => {
+    const long = row("claude:long", { plan: "A Plan Name Too Long To Fit Anywhere" });
+    for (const width of [LIST_MIN_WIDTH, 60, 70, 80, 90, 100, 120, 160]) {
+      const table = lines(render([ultra, max, unknown, plus, api, long], width)).slice(3, 10);
       expect(Math.max(...table.map((line) => line.length)), `${width}`).toBeLessThanOrEqual(width);
     }
   });

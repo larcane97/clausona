@@ -224,6 +224,27 @@ describe("ProfilePreview model", () => {
   });
 });
 
+describe("ProfilePreview plan", () => {
+  /** The value on the Plan row, or undefined when the panel has no such row. */
+  const planRow = (item: ProfileListItem) =>
+    panelFor(item)
+      .split("\n")
+      .find((line) => line.includes("Plan"))
+      ?.replace(/^.*Plan\s+/, "")
+      .replace(/[\s│]+$/, "");
+
+  it("names the plan of the account's subscription", () => {
+    expect(planRow({ ...subscription, plan: "Ultra" })).toBe("Ultra");
+  });
+
+  it("has no plan row where none is known, for an API profile, or for another account's sign-in", () => {
+    expect(planRow(subscription)).toBeUndefined();
+    expect(planRow({ ...endpoint, plan: "Max" })).toBeUndefined();
+    const other = { state: "other_account" as const, fetchedAt: 0, signedInAs: "x@example.com" };
+    expect(planRow({ ...subscription, plan: "Pro", quota: other })).toBeUndefined();
+  });
+});
+
 describe("ProfilePreview health", () => {
   it("says healthy when there is nothing to report", () => {
     expect(frameFor(doctor([]))).toContain("healthy");

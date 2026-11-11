@@ -11,6 +11,7 @@ import {
   formatCurrency,
   localTimezoneLabel,
   noSessionLimit,
+  shownPlan,
 } from "../../lib/format.js";
 import { displayName, isEnvMap } from "../../lib/profile-env.js";
 import { describeSecretSource } from "../../lib/redact.js";
@@ -324,12 +325,15 @@ export function ProfilePreview({
   }
 
   const isApi = profile.kind === "api";
+  const plan = isApi ? undefined : shownPlan(profile);
   // An API profile has no account email; its label stands in, exactly as it does in `list` and
   // in the doctor. Blank-aware, so a hand-edited blank label does not hide a real email behind
   // whitespace.
   const details = [
     <Row key="account" label="Account" value={displayName(profile)} cut="middle" />,
     ...(profile.orgName ? [<Row key="org" label="Org" value={profile.orgName} />] : []),
+    // Like the model below: a row only when there is a plan to name.
+    ...(plan ? [<Row key="plan" label="Plan" value={plan} />] : []),
     <Row
       key="config"
       label="Config"

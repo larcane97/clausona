@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -517,5 +517,41 @@ describe.skipIf(process.platform === "win32")("renewing a Claude credential in t
         Buffer.from(expected, "utf8").toString("hex"),
       ],
     ]);
+  });
+});
+
+describe("claudeAdapter.readPlan", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+  const configDir = (claudeJson?: unknown) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "clausona-plan-"));
+    dirs.push(dir);
+    if (claudeJson !== undefined) writeFileSync(path.join(dir, ".claude.json"), JSON.stringify(claudeJson));
+    return dir;
+  };
+
+  it("names the plan Claude Code stored with the account in the profile's .claude.json", async () => {
+    const ultra = configDir({
+      oauthAccount: { emailAddress: "a@example.com", planDisplayName: "Ultra", organizationType: "claude_max" },
+    });
+    const max = configDir({
+      oauthAccount: { organizationType: "claude_max", organizationRateLimitTier: "default_claude_max_5x" },
+    });
+
+    expect(await claudeAdapter.readPlan?.(ultra)).toBe("Ultra");
+    expect(await claudeAdapter.readPlan?.(max)).toBe("Max");
+  });
+
+  it("is undefined for an account with no plan stored, no account, or no readable file", async () => {
+    expect(
+      await claudeAdapter.readPlan?.(configDir({ oauthAccount: { emailAddress: "a@example.com" } })),
+    ).toBeUndefined();
+    expect(await claudeAdapter.readPlan?.(configDir({}))).toBeUndefined();
+    expect(await claudeAdapter.readPlan?.(configDir())).toBeUndefined();
+    const broken = configDir();
+    writeFileSync(path.join(broken, ".claude.json"), "{ not json");
+    expect(await claudeAdapter.readPlan?.(broken)).toBeUndefined();
   });
 });

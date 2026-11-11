@@ -239,3 +239,23 @@ describe("codexAdapter wiring", () => {
     expect(codexAdapter.configDirPattern.test(".claude")).toBe(false);
   });
 });
+
+describe("codexAdapter.readPlan", () => {
+  it("names the plan the stored id_token carries", async () => {
+    const dir = withTmpAuth({ email: "u@example.com", "https://api.openai.com/auth": { chatgpt_plan_type: "plus" } });
+    expect(await codexAdapter.readPlan?.(dir)).toBe("Plus");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("is undefined without a plan type, an id_token or an auth.json", async () => {
+    const noType = withTmpAuth({ email: "u@example.com", "https://api.openai.com/auth": {} });
+    const keyOnly = mkdtempSync(path.join(tmpdir(), "codex-test-"));
+    writeFileSync(path.join(keyOnly, "auth.json"), JSON.stringify({ auth_mode: "apikey" }));
+    const none = withTmpAuth(null);
+
+    expect(await codexAdapter.readPlan?.(noType)).toBeUndefined();
+    expect(await codexAdapter.readPlan?.(keyOnly)).toBeUndefined();
+    expect(await codexAdapter.readPlan?.(none)).toBeUndefined();
+    for (const dir of [noType, keyOnly, none]) rmSync(dir, { recursive: true, force: true });
+  });
+});

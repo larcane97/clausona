@@ -1,6 +1,7 @@
 import { readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { codexPlanName } from "../core/plan.js";
 import { spawnCommand } from "../core/process.js";
 import { parseCodexQuota, QuotaHttpError } from "../core/quota.js";
 import type { QuotaWindows } from "../types.js";
@@ -176,6 +177,17 @@ async function readCodexAccount(configDir: string): Promise<AccountInfo | null> 
   return tokensAccount((await readCodexAuth(configDir))?.tokens);
 }
 
+/**
+ * The plan of the ChatGPT sign-in in auth.json, from its id_token (codexPlanName). The token is
+ * replaced at each renewal, Codex's own or clausona's, so a plan change shows from the next one.
+ */
+async function readCodexPlan(configDir: string): Promise<string | undefined> {
+  const idToken = (await readCodexAuth(configDir))?.tokens?.id_token;
+  if (!idToken) return undefined;
+  const auth = decodeJwtPayload(idToken)?.["https://api.openai.com/auth"] as { chatgpt_plan_type?: unknown } | null;
+  return codexPlanName(auth?.chatgpt_plan_type);
+}
+
 const USAGE_URL = "https://chatgpt.com/backend-api/codex/usage";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
 const OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -318,6 +330,7 @@ export const codexAdapter: ToolAdapter = {
   defaultConfigDir: (homeDir) => path.join(homeDir, ".codex"),
   configDirPattern: /^\.codex(-.+)?$/,
   readAccountInfo: readCodexAccount,
+  readPlan: readCodexPlan,
   sharedAllow: codexSharedAllow,
   unsharedRisk: codexUnsharedRisk,
   copiedWhenUnlinked: COPIED_WHEN_UNLINKED,

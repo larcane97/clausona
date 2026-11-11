@@ -2344,6 +2344,17 @@ export type ListProfilesOptions = {
   detail?: boolean;
 };
 
+/**
+ * The plan of a profile's subscription by name, as its tool keeps it with the sign-in (`readPlan`),
+ * or undefined: an API profile has none, and a tool may keep none. Read from disk, never asked for.
+ */
+export async function profilePlan(profile: Pick<Profile, "tool" | "kind" | "configDir">): Promise<string | undefined> {
+  if (profile.kind === "api") return undefined;
+  // A hand-edited registry can name a tool there is no adapter for; its row lists without a plan.
+  const adapter = getAdapter(profile.tool) as ReturnType<typeof getAdapter> | undefined;
+  return adapter?.readPlan?.(profile.configDir).catch(() => undefined);
+}
+
 export async function listProfiles(options: ListProfilesOptions = {}): Promise<ProfileListItem[]> {
   const registry = await loadRegistry();
   if (!registry) {
@@ -2376,8 +2387,10 @@ export async function listProfiles(options: ListProfilesOptions = {}): Promise<P
     ]);
     quotas = { ...shownSpend(spend), ...plans };
   }
+  const planNames = await Promise.all(entries.map(([, profile]) => profilePlan(profile)));
 
-  return entries.map(([id, profile]) => {
+  return entries.map(([id, profile], at) => {
+    const plan = planNames[at];
     const records = usage[id]?.records ?? [];
     const model = profileModel(profile);
     // Redacted like every other path that prints a profile: the dashboard draws these.
@@ -2398,6 +2411,7 @@ export async function listProfiles(options: ListProfilesOptions = {}): Promise<P
       // map. Absent rather than undefined, so a profile without one gains no key.
       ...(model === undefined ? {} : { model }),
       ...(shown ? { api: shown.api, env: shown.env } : {}),
+      ...(plan === undefined ? {} : { plan }),
       quota: quotas[id],
       today: summarizeUsage({ now, period: "today", records }),
       week: summarizeUsage({ now, period: "week", records }),
