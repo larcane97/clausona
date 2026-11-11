@@ -48,6 +48,7 @@ import {
   describeUnconfirmedCredential,
   describeUnverifiedLogin,
   listItemJson,
+  planTag,
   renderDoctor,
   renderDoctorRoutes,
   renderList,
@@ -95,6 +96,7 @@ import {
   loginProfile,
   noRegistryError,
   parseBaseUrl,
+  profilePlan,
   proposeInitProfileNames,
   registryProblem,
   removeProfile,
@@ -659,7 +661,7 @@ function subcommandHelpText(command: string, args: string[] = []): string | unde
     case "list":
       return [
         "",
-        `  ${accent("clausona list")} ${dim("— Show profiles with quota and usage")}`,
+        `  ${accent("clausona list")} ${dim("— Show profiles with their plan, quota and usage")}`,
         "",
         `  ${bold("USAGE")}`,
         helpUsage("clausona list [--json] [--refresh] [--no-quota] [--no-renew]"),
@@ -669,6 +671,11 @@ function subcommandHelpText(command: string, args: string[] = []): string | unde
         `    ${accent("--refresh".padEnd(14))}${dim("Bypass the 5-minute quota cache")}`,
         `    ${accent("--no-quota".padEnd(14))}${dim("Skip the plan-quota lookup (no network access)")}`,
         `    ${accent("--no-renew".padEnd(14))}${dim("Never renew a lapsed token; report it as expired")}`,
+        "",
+        `  ${bold("PLAN")}`,
+        `    ${dim("ACCOUNT ends with the subscription plan, such as (Ultra), (Max) or (Plus), as")}`,
+        `    ${dim("Claude Code or Codex stored it with the sign-in, so --no-quota shows it too. None")}`,
+        `    ${dim("for an API profile or where none is stored. --json has it as plan.")}`,
         "",
         `  ${bold("QUOTA")}`,
         `    ${dim("5H and 7D are the 5-hour and weekly windows, each with how long until it resets.")}`,
@@ -1123,7 +1130,7 @@ function usageText() {
       ["init", "Discover accounts interactively"],
       ["add <profile>", "Add a new profile (--api for an endpoint instead of a login)"],
       ["use [profile]", "Switch active profile"],
-      ["list", "Show profiles with quota and usage"],
+      ["list", "Show profiles with their plan, quota and usage"],
       ["usage [profile]", "Show usage summary"],
       ["current", "Show active profile details"],
       ["config <profile>", "Configure profile settings"],
@@ -1221,9 +1228,10 @@ export async function runCommand(command: string, args: string[]) {
           if (!activeId) continue;
           const profile = registry.profiles[activeId];
           if (!profile) continue;
+          const plan = await profilePlan(profile);
           // Through the one redaction every output path uses: a spread of the stored profile
           // printed its env map, its command line and any field a hand edit added.
-          out[tool] = { id: activeId, ...redactProfile(profile) };
+          out[tool] = { id: activeId, ...redactProfile(profile), ...(plan === undefined ? {} : { plan }) };
         }
         if (Object.keys(out).length === 0) {
           throw new Error("No active profiles. Run `clausona init` to set up profiles.");
@@ -1237,6 +1245,7 @@ export async function runCommand(command: string, args: string[]) {
         if (!activeId) continue;
         const profile = registry.profiles[activeId];
         if (!profile) continue;
+        const plan = await profilePlan(profile);
         const home = homedir();
         const relativeConfigPath = path.relative(home, profile.configDir);
         const configPath =
@@ -1245,7 +1254,7 @@ export async function runCommand(command: string, args: string[]) {
             : profile.configDir;
         blocks.push(
           box(activeId, [
-            `${secondary("Account".padEnd(12))}${displayName(profile)}`,
+            `${secondary("Account".padEnd(12))}${displayName(profile)}${dim(planTag(plan))}`,
             ...(profile.orgName ? [`${secondary("Org".padEnd(12))}${profile.orgName}`] : []),
             `${secondary("Config".padEnd(12))}${dim(configPath)}`,
             ...(!profile.isPrimary

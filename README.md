@@ -162,10 +162,14 @@ already spent, so you can pick a profile that still has headroom.
 
 ```
 PROFILE             ACCOUNT                      5H         7D
-claude:work         you@example.com              6% 23m     46% 13h
-claude:personal     you@personal.com             0%         100% 4d
-codex:work          you@example.com              none       12% 5d
+claude:work         you@example.com (Max)        6% 23m     46% 13h
+claude:personal     you@personal.com (Pro)       0%         100% 4d
+codex:work          you@example.com (Pro Lite)   none       12% 5d
 ```
+
+Each account is followed by its subscription plan, such as Ultra, Max or Pro for Claude and Plus
+or Pro for Codex. It is read from what Claude Code and Codex store with the sign-in, so it shows
+with `--no-quota` too. An API profile has none, and neither does an account with no plan stored.
 
 `5H` is the rolling session window, `7D` the weekly one, each followed by how long
 until it resets. A plan without a 5-hour limit, such as a verified Claude Ultra plan or some
@@ -332,7 +336,7 @@ Scopes, tags, every option, what each change writes, the JSON fields and recipes
 | `clausona route dir\|default …`                                     | Pick a route by directory, or by default, for a plain `clausona run claude` ([dir rules](docs/routing.md#dir-rules-and-defaults)) |
 | `clausona route budget [<profile>] …`                               | List or set API profiles' spend limits, so they can join routes ([budgets](docs/routing.md#api-profiles-in-routes)) |
 | `clausona route`                                                    | Open the [Routes screen](docs/routing.md#the-routes-screen) (in a terminal) |
-| `clausona list [--json] [--refresh] [--no-quota] [--no-renew]`      | List all profiles with plan quota and usage          |
+| `clausona list [--json] [--refresh] [--no-quota] [--no-renew]`      | List all profiles with their plan, quota and usage   |
 | `clausona usage [profile] [--period=today\|week\|month\|all]`       | View cost and token usage                            |
 | `clausona current [--json]`                                         | Show active profile                                  |
 | `clausona config <profile> --merge-sessions \| --separate-sessions` | Configure session mode                               |

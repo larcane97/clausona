@@ -45,6 +45,10 @@ export type ToolAdapter = {
 
   readAccountInfo(configDir: string): Promise<AccountInfo | null>;
 
+  // The plan of the subscription signed in for `configDir`, by name (Ultra, Max, Plus), as the
+  // tool keeps it on disk with the sign-in; undefined when it keeps none. Read without a request.
+  readPlan?(configDir: string): Promise<string | undefined>;
+
   // Optional Keychain probe (Claude only on macOS).
   keychainServiceName?(args: { homeDir: string; configDir: string }): string;
   // The account the tool files its item under: the probe looks for the service under it only.

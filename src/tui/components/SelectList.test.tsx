@@ -59,6 +59,23 @@ describe("SelectList", () => {
 
     expect(line).toMatch(/claude:jaewon-\S*… ● active\s*$/);
   });
+
+  it("cuts the detail, not its tail, on a narrow line", async () => {
+    const item = { id: "a", label: "claude:work", detail: "someone.long@example.com", detailTail: " (Ultra)" };
+    const detailAt = async (columns: number) => {
+      const { lastFrame, unmount } = render(
+        <Box width={columns}>
+          <SelectList items={[item]} index={0} />
+        </Box>,
+      );
+      const frame = await waitForFrame(lastFrame, (f) => f.includes("claude:work"));
+      unmount();
+      return stripAnsi(frame).split("\n")[1] ?? "";
+    };
+
+    expect(await detailAt(60)).toContain("someone.long@example.com (Ultra)");
+    expect(await detailAt(24)).toMatch(/someone\S*… \(Ultra\)/);
+  });
 });
 
 /**

@@ -20,7 +20,9 @@ import {
   formatQuotaInline,
   localTimezoneLabel,
   offersRepair,
+  planTag,
   quotaSeverity,
+  shownPlan,
   unconfirmedCredentialHint,
 } from "../lib/format.js";
 import { displayName } from "../lib/profile-env.js";
@@ -3020,8 +3022,10 @@ export function App({
               items={profiles.map((p) => ({
                 id: p.name,
                 label: p.name,
-                // An API profile has no account email; its label, as everywhere else.
+                // An API profile has no account email; its label, as everywhere else. The plan
+                // follows it, and a narrow list cuts the address rather than the plan.
                 detail: displayName(p),
+                detailTail: planTag(shownPlan(p)) || undefined,
                 badge: p.isActive ? "active" : undefined,
                 badgeVariant: p.isActive ? ("active" as const) : undefined,
                 // An API profile's is its spend against its limit, as last read.

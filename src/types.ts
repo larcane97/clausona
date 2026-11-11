@@ -231,6 +231,11 @@ export type ProfileListItem = {
   api?: ShownApiEndpoint;
   /** The env map, with `detail` only, and redacted by `redactProfile`. */
   env?: Record<string, string>;
+  /**
+   * The subscription's plan by name (Ultra, Max, Pro, Plus), as the tool keeps it with the sign-in
+   * (`readPlan`). Absent for an API profile and where the tool keeps none.
+   */
+  plan?: string;
   quota?: QuotaSnapshot;
   today: UsageSummary;
   week: UsageSummary;

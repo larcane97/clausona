@@ -365,6 +365,12 @@ const LABELS: Record<ColumnKey, string> = {
   output: "OUTPUT",
 };
 
+/** The account column's width in the full layouts, before a plan widens it. */
+const ACCOUNT_WIDTH = 32;
+
+/** The longest plan name shown after an account; a longer one, such as a name no table here knows, is cut. */
+const PLAN_NAME_MAX = 12;
+
 /** The model column holds a gateway id such as `openrouter/z-ai/glm-5.3`; longer ones are cut. */
 const FIXED_WIDTHS = { model: 24, cost: 12, input: 14, output: 10 } as const;
 
@@ -403,8 +409,13 @@ function layoutWidth(layout: Layout): number {
  * one it always was. It does outrank spend, which `clausona usage` has in full, while
  * nothing else lists every profile's model.
  */
-function candidateLayouts(showQuota: boolean, showModel = false, columns: QuotaColumns = BOTH_WINDOWS): Layout[] {
-  const base = { profileWidth: 20, accountWidth: 32 };
+function candidateLayouts(
+  showQuota: boolean,
+  showModel = false,
+  columns: QuotaColumns = BOTH_WINDOWS,
+  wideAccount = 0,
+): Layout[] {
+  const base = { profileWidth: 20, accountWidth: ACCOUNT_WIDTH };
   const tail: ColumnKey[][] = [["cost", "input", "output"], ["cost", "input"], ["cost"], []];
   const quota: ColumnKey[] = showQuota ? (columns.session ? ["session", "weekly"] : ["weekly"]) : [];
   // 7D alone takes a row run across the quota columns, as wide as the widest needs, and a space.
@@ -420,11 +431,14 @@ function candidateLayouts(showQuota: boolean, showModel = false, columns: QuotaC
     : [];
 
   if (!showQuota) {
-    return [
-      ...withModel,
-      ...tail.map((extra) => ({ keys: ["profile", "account", ...extra] as ColumnKey[], reset: false, ...base })),
-      { keys: ["profile", "account", "cost"], reset: false, profileWidth: 14, accountWidth: 22 },
-    ];
+    return widened(
+      [
+        ...withModel,
+        ...tail.map((extra) => ({ keys: ["profile", "account", ...extra] as ColumnKey[], reset: false, ...base })),
+        { keys: ["profile", "account", "cost"], reset: false, profileWidth: 14, accountWidth: 22 },
+      ],
+      wideAccount,
+    );
   }
 
   const layouts: Layout[] = [
@@ -437,7 +451,20 @@ function candidateLayouts(showQuota: boolean, showModel = false, columns: QuotaC
     { keys: ["profile", "account", ...quota], reset: false, ...base },
     { keys: ["profile", "account", ...quota], reset: false, profileWidth: 14, accountWidth: 22 },
   ];
-  return layouts.map(sized);
+  return widened(layouts, wideAccount).map(sized);
+}
+
+/**
+ * Each layout with the full-width account column tried first with that column `wide`, as wide as
+ * the longest name with its plan after it, and then as it was. So the room a plan takes never
+ * costs another column: where it does not fit, the name is cut and the plan stays.
+ */
+function widened(layouts: Layout[], wide: number): Layout[] {
+  return layouts.flatMap((layout) =>
+    layout.accountWidth === ACCOUNT_WIDTH && wide > ACCOUNT_WIDTH
+      ? [{ ...layout, accountWidth: wide }, layout]
+      : [layout],
+  );
 }
 
 /**
@@ -449,8 +476,9 @@ export function pickLayout(
   available: number,
   showModel = false,
   columns: QuotaColumns = BOTH_WINDOWS,
+  wideAccount = 0,
 ): Layout {
-  const layouts = candidateLayouts(showQuota, showModel, columns);
+  const layouts = candidateLayouts(showQuota, showModel, columns, wideAccount);
   return layouts.find((layout) => layoutWidth(layout) <= available) ?? layouts[layouts.length - 1];
 }
 
@@ -508,7 +536,21 @@ export function renderList(items: ProfileListItem[], options: { width?: number }
     session: sorted.some((item) => item.kind !== "api" && hasSessionWindow(item.quota)),
     across: (reset) => Math.max(0, ...sorted.map((item) => stripAnsi(spanOf(item, reset) ?? "").length)),
   };
-  const layout = pickLayout(showQuota, available, showModel, columns);
+  // An API profile has no account email; its label stands in, exactly as it does in `config
+  // --show`. The dash is for a hand-edited profiles.json that carries neither: a blank cell there
+  // reads as a bug rather than as "nothing to show". The plan follows, and the column widens for it
+  // when there is room.
+  const accountOf = (item: ProfileListItem) => displayName(item).trim() || "—";
+  const tagOf = (item: ProfileListItem) => planTag(shownPlan(item));
+  const longestTag = Math.max(0, ...sorted.map((item) => tagOf(item).length));
+  const wideAccount =
+    longestTag > 0
+      ? Math.min(
+          ACCOUNT_WIDTH + longestTag,
+          Math.max(...sorted.map((item) => accountOf(item).length + tagOf(item).length)) + 1,
+        )
+      : 0;
+  const layout = pickLayout(showQuota, available, showModel, columns, wideAccount);
 
   const widths = layout.keys.map((key) => columnWidth(key, layout));
   const headerLine = `    ${layout.keys.map((key, i) => secondary(LABELS[key].padEnd(widths[i]))).join("")}`;
@@ -530,11 +572,10 @@ export function renderList(items: ProfileListItem[], options: { width?: number }
           return item.isActive ? accent(name) : name;
         }
         case "account": {
-          // An API profile has no account email; its label stands in, exactly as it does
-          // in `config --show`. The dash is for a hand-edited profiles.json that carries
-          // neither — a blank cell there reads as a bug rather than as "nothing to show".
-          const account = truncate(displayName(item).trim() || "—", layout.accountWidth - 1);
-          return item.isActive ? account : secondary(account);
+          // The name is cut to leave the plan whole.
+          const tag = tagOf(item);
+          const account = truncate(accountOf(item), layout.accountWidth - 1 - tag.length);
+          return `${item.isActive ? account : secondary(account)}${dim(tag)}`;
         }
         case "model": {
           const model = fitModel(item.model, FIXED_WIDTHS.model - 1);
@@ -586,13 +627,33 @@ export function renderList(items: ProfileListItem[], options: { width?: number }
 }
 
 /**
- * A profile as `list --json` gives it. Its quota always says whether the plan has a 5-hour limit:
- * `sessionLimit` true or false, or null when no reading says - an API profile's, which has no
- * plan, or one an older clausona cached. Fields are only ever added.
+ * A profile as `list --json` gives it. `plan` is left out where the table shows none (shownPlan).
+ * Its quota always says whether the plan has a 5-hour limit: `sessionLimit` true or false, or null
+ * when no reading says - an API profile's, which has no plan, or one an older clausona cached.
+ * Fields are only ever added.
  */
 export function listItemJson(item: ProfileListItem): object {
-  if (!item.quota) return item;
-  return { ...item, quota: { ...item.quota, sessionLimit: item.quota.sessionLimit ?? null } };
+  const shown = shownPlan(item) === item.plan ? item : { ...item, plan: undefined };
+  if (!shown.quota) return shown;
+  return { ...shown, quota: { ...shown.quota, sessionLimit: shown.quota.sessionLimit ?? null } };
+}
+
+/**
+ * The plan a profile's row names: none for an API profile, which is billed by its key, and none
+ * while its stored sign-in is another account's, whose plan the one read is (the row says
+ * `other account` instead).
+ */
+export function shownPlan(item: Pick<ProfileListItem, "kind" | "plan" | "quota">): string | undefined {
+  if (item.kind === "api") return undefined;
+  return item.quota?.state === "other_account" ? undefined : item.plan;
+}
+
+/**
+ * What follows an account's name in `list`, `current` and the dashboard: its plan in brackets,
+ * ` (Max)`. Empty where no plan is named.
+ */
+export function planTag(plan: string | undefined): string {
+  return plan ? ` (${truncate(plan, PLAN_NAME_MAX)})` : "";
 }
 
 // ─── Usage Summary ──────────────────────────────────────────────────
