@@ -8,6 +8,8 @@ export type SelectListItem = {
   id: string;
   label: string;
   detail?: string;
+  /** Text after the detail that is never cut: the detail gives way to it on a narrow line. */
+  detailTail?: string;
   selected?: boolean;
   badge?: string;
   badgeVariant?: "active" | "healthy" | "warning" | "error" | "muted" | "primary";
@@ -168,7 +170,18 @@ export function SelectList({
               </Box>
 
               {/* Detail on its own line */}
-              {item.detail ? (
+              {item.detail && item.detailTail ? (
+                <Box width="100%" flexWrap="nowrap" overflow="hidden">
+                  <Box flexShrink={1} minWidth={0} overflow="hidden">
+                    <Text color={focused ? color.secondary : color.muted} wrap="truncate-end">
+                      {item.detail}
+                    </Text>
+                  </Box>
+                  <Box flexShrink={0}>
+                    <Text color={color.muted}>{item.detailTail}</Text>
+                  </Box>
+                </Box>
+              ) : item.detail ? (
                 <Text color={focused ? color.secondary : color.muted} wrap="truncate-end">
                   {item.detail}
                 </Text>

@@ -48,6 +48,7 @@ import {
   describeUnconfirmedCredential,
   describeUnverifiedLogin,
   listItemJson,
+  planTag,
   renderDoctor,
   renderDoctorRoutes,
   renderList,
@@ -672,9 +673,9 @@ function subcommandHelpText(command: string, args: string[] = []): string | unde
         `    ${accent("--no-renew".padEnd(14))}${dim("Never renew a lapsed token; report it as expired")}`,
         "",
         `  ${bold("PLAN")}`,
-        `    ${dim("The subscription plan (Ultra, Max, Pro, Plus) as Claude Code or Codex stored it")}`,
-        `    ${dim("with the sign-in, so --no-quota shows it too. API for an API profile. A dash: no")}`,
-        `    ${dim("plan is stored for that account. --json has it as plan, absent where there is none.")}`,
+        `    ${dim("ACCOUNT ends with the subscription plan, such as (Ultra), (Max) or (Plus), as")}`,
+        `    ${dim("Claude Code or Codex stored it with the sign-in, so --no-quota shows it too. None")}`,
+        `    ${dim("for an API profile or where none is stored. --json has it as plan.")}`,
         "",
         `  ${bold("QUOTA")}`,
         `    ${dim("5H and 7D are the 5-hour and weekly windows, each with how long until it resets.")}`,
@@ -1253,9 +1254,8 @@ export async function runCommand(command: string, args: string[]) {
             : profile.configDir;
         blocks.push(
           box(activeId, [
-            `${secondary("Account".padEnd(12))}${displayName(profile)}`,
+            `${secondary("Account".padEnd(12))}${displayName(profile)}${dim(planTag(plan))}`,
             ...(profile.orgName ? [`${secondary("Org".padEnd(12))}${profile.orgName}`] : []),
-            ...(plan ? [`${secondary("Plan".padEnd(12))}${plan}`] : []),
             `${secondary("Config".padEnd(12))}${dim(configPath)}`,
             ...(!profile.isPrimary
               ? [`${secondary("Sessions".padEnd(12))}${profile.mergeSessions ? "merged" : "separated"}`]

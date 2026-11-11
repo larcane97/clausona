@@ -20,6 +20,7 @@ import {
   formatQuotaInline,
   localTimezoneLabel,
   offersRepair,
+  planTag,
   quotaSeverity,
   shownPlan,
   unconfirmedCredentialHint,
@@ -413,12 +414,6 @@ function apiFieldUnderCursor(screen: Screen, state: AddState | null): ApiField |
  * profile has a key instead, which `loginProfile` refuses. Offering it there asked for a
  * confirmation and then answered with that refusal.
  */
-/** A Profiles row's second line: the plan, when there is one to name, and the account. */
-function planned(profile: ProfileListItem): string {
-  const plan = profile.kind === "api" ? undefined : shownPlan(profile);
-  return plan ? `${plan} · ${displayName(profile)}` : displayName(profile);
-}
-
 function offersRelogin(profile: ProfileListItem | undefined): boolean {
   return profile !== undefined && !profile.isPrimary && profile.kind !== "api";
 }
@@ -3028,8 +3023,9 @@ export function App({
                 id: p.name,
                 label: p.name,
                 // An API profile has no account email; its label, as everywhere else. The plan
-                // leads, so a narrow list cuts the address rather than it.
-                detail: planned(p),
+                // follows it, and a narrow list cuts the address rather than the plan.
+                detail: displayName(p),
+                detailTail: planTag(shownPlan(p)) || undefined,
                 badge: p.isActive ? "active" : undefined,
                 badgeVariant: p.isActive ? ("active" as const) : undefined,
                 // An API profile's is its spend against its limit, as last read.

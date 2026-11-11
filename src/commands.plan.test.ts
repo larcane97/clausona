@@ -130,27 +130,28 @@ describe("plans in list", () => {
     expect(items.find((item) => item.name === "claude:old")).not.toHaveProperty("plan");
   });
 
-  it("shows them in a PLAN column without reading the quota", async () => {
+  it("names them after the account without reading the quota", async () => {
     const h = await harness();
     const out = stripAnsi(await h.run("list", "--no-quota"));
     const row = (name: string) => out.split("\n").find((line) => line.includes(name)) ?? "";
 
-    expect(out).toMatch(/PROFILE\s+ACCOUNT\s+PLAN/);
-    expect(row("claude:default")).toMatch(/primary@example\.com\s+Max\s/);
-    expect(row("claude:work")).toMatch(/work@example\.com\s+Ultra\s/);
-    expect(row("claude:old")).toMatch(/old@example\.com\s+—\s/);
-    expect(row("codex:work")).toMatch(/cx@example\.com\s+Plus\s/);
-    expect(row("claude:glm")).toMatch(/gpu-box\s+API\s/);
+    expect(out).not.toContain("PLAN");
+    expect(row("claude:default")).toContain("primary@example.com (Max)");
+    expect(row("claude:work")).toContain("work@example.com (Ultra)");
+    expect(row("claude:old")).toMatch(/old@example\.com\s/);
+    expect(row("claude:old")).not.toContain("(");
+    expect(row("codex:work")).toContain("cx@example.com (Plus)");
+    expect(row("claude:glm")).not.toContain("(");
   });
 });
 
 describe("plans in current", () => {
-  it("has a Plan row for each active account that has one", async () => {
+  it("names the plan after each active account that has one", async () => {
     const h = await harness({ claude: "claude:work" });
     const out = stripAnsi(await h.run("current"));
 
-    expect(out).toMatch(/Plan +Ultra/);
-    expect(out).toMatch(/Plan +Plus/);
+    expect(out).toMatch(/Account +work@example\.com \(Ultra\)/);
+    expect(out).toMatch(/Account +cx@example\.com \(Plus\)/);
   });
 
   it("names the plan in current --json, and leaves it out where none is known", async () => {
@@ -161,8 +162,9 @@ describe("plans in current", () => {
     vi.resetModules();
     const without = JSON.parse(await (await harness({ claude: "claude:old" })).run("current", "--json"));
     expect(without.claude).not.toHaveProperty("plan");
-    // An API profile has none: the one Plan row is the active Codex account's.
+    // An API profile has none: the one plan named is the active Codex account's.
     const api = stripAnsi(await (await harness({ claude: "claude:glm" })).run("current"));
-    expect(api.match(/Plan +\S+/g)).toEqual(["Plan        Plus"]);
+    expect(api).toMatch(/Account +gpu-box\s/);
+    expect(api.match(/\((\w+)\)/g)).toEqual(["(Plus)"]);
   });
 });

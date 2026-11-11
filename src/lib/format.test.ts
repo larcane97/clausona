@@ -853,21 +853,17 @@ describe("renderList with plans", () => {
   const lines = (out: string) => out.split("\n");
   const rowFor = (out: string, name: string) => lines(out).find((line) => line.includes(name)) ?? "";
 
-  it("names each account's plan after its address, a dash where none is known and API for an API profile", () => {
+  it("names each account's plan after its address, and none where none is known or for an API profile", () => {
     const out = render([ultra, max, unknown, plus, api]);
 
-    expect(lines(out)[3]).toMatch(/^ {4}PROFILE\s+ACCOUNT\s+PLAN\s+5H\s+7D\s+COST/);
-    expect(rowFor(out, "claude:ultra")).toMatch(/ultra@example\.com\s+Ultra\s+12% 3h/);
-    expect(rowFor(out, "claude:max")).toMatch(/max@example\.com\s+Max\s+12%/);
-    expect(rowFor(out, "codex:work")).toMatch(/work@example\.com\s+Plus\s+12%/);
-    expect(rowFor(out, "claude:old")).toMatch(/old@example\.com\s+—\s+12%/);
-    expect(rowFor(out, "claude:glm")).toMatch(/gpu-box\s+API\s+/);
-  });
-
-  it("has no PLAN column until some account has a plan, and none for API profiles alone", () => {
-    expect(lines(render([unknown]))[3]).not.toContain("PLAN");
-    expect(lines(render([unknown, api]))[3]).not.toContain("PLAN");
-    expect(lines(render([unknown, api, ultra]))[3]).toContain("PLAN");
+    expect(lines(out)[3]).toMatch(/^ {4}PROFILE\s+ACCOUNT\s+5H\s+7D\s+COST/);
+    expect(lines(out)[3]).not.toContain("PLAN");
+    expect(rowFor(out, "claude:ultra")).toMatch(/ultra@example\.com \(Ultra\)\s+12% 3h/);
+    expect(rowFor(out, "claude:max")).toMatch(/max@example\.com \(Max\)\s+12%/);
+    expect(rowFor(out, "codex:work")).toMatch(/work@example\.com \(Plus\)\s+12%/);
+    expect(rowFor(out, "claude:old")).toMatch(/old@example\.com\s+12%/);
+    expect(rowFor(out, "claude:glm")).toMatch(/gpu-box\s{2,}/);
+    expect(rowFor(out, "claude:glm")).not.toContain("(");
   });
 
   it("says no plan for a sign-in that is another account's, in the table and in list --json", () => {
@@ -877,7 +873,7 @@ describe("renderList with plans", () => {
     });
     const out = render([ultra, other]);
 
-    expect(rowFor(out, "claude:moved")).toMatch(/moved@example\.com\s+—\s+other account/);
+    expect(rowFor(out, "claude:moved")).toMatch(/moved@example\.com\s+other account/);
     expect(shownPlan(other)).toBeUndefined();
     expect(JSON.parse(JSON.stringify(listItemJson(other)))).not.toHaveProperty("plan");
     expect(JSON.parse(JSON.stringify(listItemJson(ultra))).plan).toBe("Ultra");
@@ -885,21 +881,26 @@ describe("renderList with plans", () => {
     expect(JSON.parse(JSON.stringify(listItemJson({ ...ultra, quota: undefined }))).plan).toBe("Ultra");
   });
 
-  it("keeps the plan longer than the reset times and spend, and drops it before the narrowest layout", () => {
-    // 80 columns: the plan stays, the reset times have gone.
-    const at80 = render([ultra, max], 80);
-    expect(lines(at80)[3]).toMatch(/PLAN\s+5H\s+7D\s*$/);
-    expect(rowFor(at80, "claude:ultra")).toMatch(/Ultra\s+12%\s+40%\s*$/);
-    // The narrowest layout is the one the table had without a plan column.
-    expect(lines(render([ultra, max], LIST_MIN_WIDTH))[3]).not.toContain("PLAN");
-    expect(pickLayout(true, 20, false, undefined, 7)).toEqual(pickLayout(true, LIST_MIN_WIDTH - 1));
+  it("widens the account column for the plan where there is room, and otherwise cuts the name, not the plan", () => {
+    const long = row("claude:long", { email: "a.rather.long.name@example.com", plan: "Ultra" });
+
+    expect(rowFor(render([long, max]), "claude:long")).toContain("a.rather.long.name@example.com (Ultra)");
+    // At 80 columns the widened column does not fit; the table is the one it would be without
+    // plans, and the name gives way.
+    const at80 = render([long, max], 80);
+    expect(rowFor(at80, "claude:long")).toMatch(/a\.rather\.long\.name@ex\S*… \(Ultra\)\s+12% 3h/);
+    expect(pickLayout(true, 80, false, undefined, 39)).toEqual(pickLayout(true, 80));
+    expect(pickLayout(true, 20, false, undefined, 39)).toEqual(pickLayout(true, LIST_MIN_WIDTH - 1));
   });
 
-  it("never emits a table line wider than the terminal", () => {
+  it("cuts a plan name too long to show whole, and never emits a table line wider than the terminal", () => {
     const long = row("claude:long", { plan: "A Plan Name Too Long To Fit Anywhere" });
+
+    expect(rowFor(render([long]), "claude:long")).toContain("long@example.com (A Plan Name…)");
     for (const width of [LIST_MIN_WIDTH, 60, 70, 80, 90, 100, 120, 160]) {
       const table = lines(render([ultra, max, unknown, plus, api, long], width)).slice(3, 10);
       expect(Math.max(...table.map((line) => line.length)), `${width}`).toBeLessThanOrEqual(width);
+      expect(rowFor(render([ultra, long], width), "claude:ultra"), `${width}`).toContain("(Ultra)");
     }
   });
 });

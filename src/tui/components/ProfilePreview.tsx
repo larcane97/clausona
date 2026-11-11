@@ -11,6 +11,7 @@ import {
   formatCurrency,
   localTimezoneLabel,
   noSessionLimit,
+  planTag,
   shownPlan,
 } from "../../lib/format.js";
 import { displayName, isEnvMap } from "../../lib/profile-env.js";
@@ -27,10 +28,13 @@ function Row({
   value,
   valueColor,
   cut = "end",
+  tail,
 }: {
   label: string;
   value: string;
   valueColor?: string;
+  /** Muted text after the value that is never cut: the value gives way to it. */
+  tail?: string;
   /**
    * Where the value is cut when it is longer than its line: always on one line, so that the panel
    * can count its lines to fit the terminal (see `fitPanel`). One line also stops character-by-
@@ -46,9 +50,22 @@ function Row({
         <Text color={color.muted}>{label}</Text>
       </Box>
       <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
-        <Text color={valueColor ?? color.text} wrap={`truncate-${cut}`}>
-          {value}
-        </Text>
+        {tail ? (
+          <>
+            <Box flexShrink={1} minWidth={0} overflow="hidden">
+              <Text color={valueColor ?? color.text} wrap={`truncate-${cut}`}>
+                {value}
+              </Text>
+            </Box>
+            <Box flexShrink={0}>
+              <Text color={color.muted}>{tail}</Text>
+            </Box>
+          </>
+        ) : (
+          <Text color={valueColor ?? color.text} wrap={`truncate-${cut}`}>
+            {value}
+          </Text>
+        )}
       </Box>
     </Box>
   );
@@ -325,15 +342,18 @@ export function ProfilePreview({
   }
 
   const isApi = profile.kind === "api";
-  const plan = isApi ? undefined : shownPlan(profile);
   // An API profile has no account email; its label stands in, exactly as it does in `list` and
   // in the doctor. Blank-aware, so a hand-edited blank label does not hide a real email behind
   // whitespace.
   const details = [
-    <Row key="account" label="Account" value={displayName(profile)} cut="middle" />,
+    <Row
+      key="account"
+      label="Account"
+      value={displayName(profile)}
+      cut="middle"
+      tail={planTag(shownPlan(profile)) || undefined}
+    />,
     ...(profile.orgName ? [<Row key="org" label="Org" value={profile.orgName} />] : []),
-    // Like the model below: a row only when there is a plan to name.
-    ...(plan ? [<Row key="plan" label="Plan" value={plan} />] : []),
     <Row
       key="config"
       label="Config"

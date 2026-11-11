@@ -225,23 +225,35 @@ describe("ProfilePreview model", () => {
 });
 
 describe("ProfilePreview plan", () => {
-  /** The value on the Plan row, or undefined when the panel has no such row. */
-  const planRow = (item: ProfileListItem) =>
+  /** The Account row's value, without the panel's border. */
+  const accountRow = (item: ProfileListItem) =>
     panelFor(item)
       .split("\n")
-      .find((line) => line.includes("Plan"))
-      ?.replace(/^.*Plan\s+/, "")
+      .find((line) => line.includes("Account"))
+      ?.replace(/^.*Account\s+/, "")
       .replace(/[\s│]+$/, "");
 
-  it("names the plan of the account's subscription", () => {
-    expect(planRow({ ...subscription, plan: "Ultra" })).toBe("Ultra");
+  it("names the plan of the account's subscription after the account", () => {
+    expect(accountRow({ ...subscription, plan: "Ultra" })).toBe(`${subscription.email} (Ultra)`);
   });
 
-  it("has no plan row where none is known, for an API profile, or for another account's sign-in", () => {
-    expect(planRow(subscription)).toBeUndefined();
-    expect(planRow({ ...endpoint, plan: "Max" })).toBeUndefined();
+  it("names none where none is known, for an API profile, or for another account's sign-in", () => {
+    expect(accountRow(subscription)).toBe(subscription.email);
+    expect(accountRow({ ...endpoint, plan: "Max" })).not.toContain("(");
     const other = { state: "other_account" as const, fetchedAt: 0, signedInAs: "x@example.com" };
-    expect(planRow({ ...subscription, plan: "Pro", quota: other })).toBeUndefined();
+    expect(accountRow({ ...subscription, plan: "Pro", quota: other })).toBe(subscription.email);
+  });
+
+  it("cuts the address, not the plan, in a narrow panel", () => {
+    const long = { ...subscription, email: "someone.with.a.long.name@example.com", plan: "Ultra" };
+    const frame = render(
+      <Box width={36}>
+        <ProfilePreview profile={long} />
+      </Box>,
+    ).lastFrame();
+    const line = (frame ?? "").split("\n").find((l) => l.includes("Account")) ?? "";
+
+    expect(line).toMatch(/…\S* \(Ultra\)/);
   });
 });
 

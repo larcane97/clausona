@@ -161,15 +161,15 @@ Code account, so they need `claude login` once even if you will use only API pro
 already spent, so you can pick a profile that still has headroom.
 
 ```
-PROFILE             ACCOUNT                      PLAN      5H         7D
-claude:work         you@example.com              Max       6% 23m     46% 13h
-claude:personal     you@personal.com             Pro       0%         100% 4d
-codex:work          you@example.com              Pro Lite  none       12% 5d
+PROFILE             ACCOUNT                      5H         7D
+claude:work         you@example.com (Max)        6% 23m     46% 13h
+claude:personal     you@personal.com (Pro)       0%         100% 4d
+codex:work          you@example.com (Pro Lite)   none       12% 5d
 ```
 
-`PLAN` is the account's subscription plan, such as Ultra, Max or Pro for Claude and Plus or Pro
-for Codex. It is read from what Claude Code and Codex store with the sign-in, so it shows with
-`--no-quota` too. An API profile shows `API`, and a dash means no plan is stored for that account.
+Each account is followed by its subscription plan, such as Ultra, Max or Pro for Claude and Plus
+or Pro for Codex. It is read from what Claude Code and Codex store with the sign-in, so it shows
+with `--no-quota` too. An API profile has none, and neither does an account with no plan stored.
 
 `5H` is the rolling session window, `7D` the weekly one, each followed by how long
 until it resets. A plan without a 5-hour limit, such as a verified Claude Ultra plan or some
