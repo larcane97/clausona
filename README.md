@@ -529,7 +529,7 @@ account, and `clausona doctor` says so. Other files fall back to hard links.
 
 ## Listed in
 
-[Awesome Claude Code](https://github.com/hesreallyhim/awesome-claude-code), [Awesome AI Plugins](https://github.com/hashgraph-online/awesome-ai-plugins), [Awesome CLI Coding Agents](https://github.com/bradAGI/awesome-cli-coding-agents)
+[Awesome Claude Code](https://github.com/hesreallyhim/awesome-claude-code), [Awesome AI Plugins](https://github.com/hashgraph-online/awesome-ai-plugins), [Awesome CLI Coding Agents](https://github.com/bradAGI/awesome-cli-coding-agents), [Awesome herdr](https://github.com/yigitkonur/awesome-herdr)
 
 ## Contributing
 
