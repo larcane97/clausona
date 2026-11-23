@@ -1,15 +1,41 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync } from "node:fs";
+import { mkdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { acquireDirLock, removeHeldDirLocks } from "./dir-lock.js";
+
+// The real calls, which a test can make refuse once the way Windows does.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, mkdir: vi.fn(actual.mkdir), stat: vi.fn(actual.stat) };
+});
 
 const LOCK = { staleMs: 60_000, updateMs: 5_000 };
 
 const temps: string[] = [];
+const real = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+
+function refusal(code: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`${code}: operation not permitted`), { code });
+}
+
+/** Runs `fn` as if on `platform`. */
+async function on<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
+  const actual = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value: platform });
+  try {
+    return await fn();
+  } finally {
+    if (actual) Object.defineProperty(process, "platform", actual);
+  }
+}
+
 afterEach(() => {
+  vi.mocked(mkdir).mockReset().mockImplementation(real.mkdir);
+  vi.mocked(stat).mockReset().mockImplementation(real.stat);
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -37,6 +63,43 @@ describe("acquireDirLock", () => {
 
     expect(await acquireDirLock(lock, LOCK)).toBeNull();
     expect(existsSync(lock)).toBe(true);
+  });
+
+  // Windows refuses to create the directory, or to stat it, while the holder's release is
+  // still deleting it. That is the holder going, not a reason to give up.
+  it("waits on Windows while the holder's lock is still being deleted", async () => {
+    const lock = lockPath();
+    mkdirSync(lock);
+    vi.mocked(mkdir).mockRejectedValueOnce(refusal("EPERM"));
+    vi.mocked(stat).mockImplementationOnce(real.stat).mockRejectedValueOnce(refusal("EPERM"));
+    setTimeout(() => rmSync(lock, { recursive: true, force: true }), 150);
+
+    const release = await on("win32", () => acquireDirLock(lock, { ...LOCK, waitMs: 2_000, retryMs: 20 }));
+
+    expect(release).not.toBeNull();
+    expect(statSync(lock).isDirectory()).toBe(true);
+    await release?.();
+  });
+
+  it("throws a refusal on Windows when no lock is there to wait for", async () => {
+    const lock = lockPath();
+    vi.mocked(mkdir).mockRejectedValue(refusal("EACCES"));
+
+    await expect(on("win32", () => acquireDirLock(lock, { ...LOCK, waitMs: 2_000 }))).rejects.toMatchObject({
+      code: "EACCES",
+    });
+    // Tried once more, in case a delete had just finished, and no more.
+    expect(vi.mocked(mkdir)).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws EPERM elsewhere, where it never means a lock being deleted", async () => {
+    const lock = lockPath();
+    mkdirSync(lock);
+    vi.mocked(mkdir).mockRejectedValueOnce(refusal("EPERM"));
+
+    await expect(on("linux", () => acquireDirLock(lock, { ...LOCK, waitMs: 2_000 }))).rejects.toMatchObject({
+      code: "EPERM",
+    });
   });
 
   it("takes over a lock whose holder stopped refreshing it", async () => {
