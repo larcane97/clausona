@@ -44,24 +44,46 @@ export function removeHeldDirLocks(): void {
 
 let exitListenerAdded = false;
 
+/** An error Windows gives for a directory that is still being deleted, among others. */
+function beingDeleted(code: string | undefined): boolean {
+  return process.platform === "win32" && (code === "EPERM" || code === "EACCES");
+}
+
 /**
  * Creates the lock directory and resolves to its mtime, or to null while a live holder has
  * it. A lock whose mtime is older than `staleMs` is removed and one more attempt made, the
  * one takeover proper-lockfile allows: if another process takes the lock in between, it
  * wins.
+ *
+ * Windows refuses, with EPERM or EACCES, both to create a directory and to stat one while the
+ * last one at that path is still being deleted, as it is the moment its holder releases it.
+ * Those count as the holder still having it while the directory is there. With none there,
+ * one more try tells a delete that just finished from a real refusal, which is thrown.
  */
-async function create(lockPath: string, staleMs: number, takeOver = true): Promise<number | null> {
+async function create(lockPath: string, staleMs: number, takeOver = true, retry = true): Promise<number | null> {
   try {
     await mkdir(lockPath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "EEXIST") {
+      if (!beingDeleted(code)) throw error;
+      const exists = await stat(lockPath).then(
+        () => true,
+        (statError: NodeJS.ErrnoException) => statError.code !== "ENOENT",
+      );
+      if (exists) return null;
+      if (retry) return create(lockPath, staleMs, takeOver, false);
+      throw error;
+    }
     if (!takeOver) return null;
     // Gone by the time it is looked at means released in between, which is worth the same
     // one more attempt as a stale lock.
     const info = await stat(lockPath).catch((statError: NodeJS.ErrnoException) => {
       if (statError.code === "ENOENT") return null;
+      if (beingDeleted(statError.code)) return "held" as const;
       throw statError;
     });
+    if (info === "held") return null;
     if (info && info.mtimeMs >= Date.now() - staleMs) return null;
     if (info) {
       await rmdir(lockPath).catch((rmError: NodeJS.ErrnoException) => {
