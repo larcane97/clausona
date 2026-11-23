@@ -71,8 +71,13 @@ describe("acquireDirLock", () => {
     const lock = lockPath();
     mkdirSync(lock);
     vi.mocked(mkdir).mockRejectedValueOnce(refusal("EPERM"));
-    vi.mocked(stat).mockImplementationOnce(real.stat).mockRejectedValueOnce(refusal("EPERM"));
-    setTimeout(() => rmSync(lock, { recursive: true, force: true }), 150);
+    // The second look finds it on its way out, and it is gone by the next try.
+    vi.mocked(stat)
+      .mockImplementationOnce(real.stat)
+      .mockImplementationOnce(async () => {
+        rmSync(lock, { recursive: true, force: true });
+        throw refusal("EPERM");
+      });
 
     const release = await on("win32", () => acquireDirLock(lock, { ...LOCK, waitMs: 2_000, retryMs: 20 }));
 
@@ -90,6 +95,17 @@ describe("acquireDirLock", () => {
     });
     // Tried once more, in case a delete had just finished, and no more.
     expect(vi.mocked(mkdir)).toHaveBeenCalledTimes(2);
+  });
+
+  it("tries once more on Windows when the refused lock is already gone, and takes it", async () => {
+    const lock = lockPath();
+    vi.mocked(mkdir).mockRejectedValueOnce(refusal("EPERM"));
+
+    const release = await on("win32", () => acquireDirLock(lock, LOCK));
+
+    expect(release).not.toBeNull();
+    expect(vi.mocked(mkdir)).toHaveBeenCalledTimes(2);
+    await release?.();
   });
 
   it("throws EPERM elsewhere, where it never means a lock being deleted", async () => {
